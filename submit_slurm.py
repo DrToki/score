@@ -12,7 +12,7 @@ import argparse
 
 def create_slurm_script(pdb_input: str, xml_script: str, job_name: str, 
                        partition: str = "cpu", cpus: int = 8, memory: str = "32G", 
-                       time: str = "24:00:00", gpu: bool = False) -> str:
+                       time: str = "24:00:00", gpu: bool = False, no_ipsae: bool = False) -> str:
     """Create simple SLURM script"""
     
     script_content = f"""#!/bin/bash
@@ -50,7 +50,7 @@ python simple_pipeline.py \\
     if xml_script:
         script_content += f"    --xml_script {xml_script} \\\n"
     
-    if args.no_ipsae:
+    if no_ipsae:
         script_content += "    --no_ipsae \\\n"
     
     script_content += f"""    --output {job_name}_scores.csv
@@ -108,7 +108,8 @@ def main():
         cpus=args.cpus,
         memory=args.memory,
         time=args.time,
-        gpu=args.gpu
+        gpu=args.gpu,
+        no_ipsae=args.no_ipsae
     )
     
     # Submit job

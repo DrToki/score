@@ -128,13 +128,16 @@ class AF2ScorerSimple:
         
         if is_monomer:
             plddt_binder = plddt_total
-            pae_interaction = float('nan')
+            pae_interaction = 0.0  # Use 0.0 instead of NaN for monomers
         else:
             plddt_binder = np.mean(plddt_array[:binder_length])
-            pae = confidences.get('predicted_aligned_error', np.full((len(plddt_array), len(plddt_array)), np.nan))
-            pae_interaction1 = np.mean(pae[:binder_length, binder_length:])
-            pae_interaction2 = np.mean(pae[binder_length:, :binder_length])
-            pae_interaction = (pae_interaction1 + pae_interaction2) / 2
+            pae = confidences.get('predicted_aligned_error', np.full((len(plddt_array), len(plddt_array)), 15.0))
+            if len(plddt_array) > binder_length:
+                pae_interaction1 = np.mean(pae[:binder_length, binder_length:])
+                pae_interaction2 = np.mean(pae[binder_length:, :binder_length])
+                pae_interaction = (pae_interaction1 + pae_interaction2) / 2
+            else:
+                pae_interaction = 15.0  # Default value if arrays are wrong size
         
         return {
             'plddt_total': float(plddt_total),

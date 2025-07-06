@@ -77,10 +77,13 @@ class IPSAEScorer:
                         if chain_id not in chains:
                             chains[chain_id] = []
                         
-                        # Extract residue number
-                        res_num = int(line[22:26].strip())
-                        if res_num not in chains[chain_id]:
-                            chains[chain_id].append(res_num)
+                        # Extract residue number and handle parsing errors
+                        try:
+                            res_num = int(line[22:26].strip())
+                            if res_num not in chains[chain_id]:
+                                chains[chain_id].append(res_num)
+                        except ValueError:
+                            continue  # Skip lines with invalid residue numbers
         except Exception as e:
             print(f"Structure parsing failed: {e}")
             # Return default 2-chain system
@@ -110,10 +113,14 @@ class IPSAEScorer:
         chain1_residues = len(chains_data[chain_ids[0]])
         chain2_start = chain1_residues
         
-        # Interface PAE between chains
-        interface_pae_12 = np.mean(pae_matrix[:chain1_residues, chain2_start:])
-        interface_pae_21 = np.mean(pae_matrix[chain2_start:, :chain1_residues])
-        interface_pae = (interface_pae_12 + interface_pae_21) / 2.0
+        # Ensure pae_matrix is large enough
+        if pae_matrix.shape[0] < chain2_start or pae_matrix.shape[1] < chain2_start:
+            interface_pae = 15.0  # Default value
+        else:
+            # Interface PAE between chains
+            interface_pae_12 = np.mean(pae_matrix[:chain1_residues, chain2_start:])
+            interface_pae_21 = np.mean(pae_matrix[chain2_start:, :chain1_residues])
+            interface_pae = (interface_pae_12 + interface_pae_21) / 2.0
         
         # Calculate simplified metrics
         ipsae_score = self._calculate_ipsae(interface_pae)
