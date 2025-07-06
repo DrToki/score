@@ -1,0 +1,22 @@
+name: protein_scoring_gpu
+channels:
+  - conda-forge
+  - bioconda
+  - nvidia
+  - defaults
+dependencies:
+  - python=3.9
+  - pip
+  - numpy
+  - biopython
+  - scipy
+  - pandas
+  - cudatoolkit=11.8
+  - cudnn
+  - pip:
+    - jax[cuda11_pip] -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
+    - dm-haiku
+    - chex
+    - ml-collections
+    - immutabledict
+    - contextlib2

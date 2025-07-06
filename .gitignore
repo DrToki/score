@@ -1,0 +1,134 @@
+# Project-specific files
+CLAUDE.md
+plan.md
+PROGRESS.md
+
+# Temporary and log files
+*.log
+*.tmp
+*.temp
+temp_*
+tmp_*
+
+# AF2 model weights (large files)
+af2_initial_guess/model_weights/
+model_weights/
+*.npz
+*.tar
+params_model_*
+
+# Output directories and results
+scoring_results/
+outputs/
+results/
+slurm_jobs/
+af2_results/
+rosetta_results/
+pipeline_results/
+
+# Score files and outputs
+*.sc
+*.csv
+*.json
+*_scores.*
+*_output.*
+*_af2pred.*
+
+# SLURM files
+*.out
+*.err
+slurm-*.out
+slurm-*.err
+
+# Python cache and environments
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# PyTorch and JAX cache
+.cache/
+torch_cache/
+jax_cache/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Test files and temporary structures
+test_*.pdb
+test_*.cif
+sample_*.pdb
+example_*.pdb
+dummy_*.pdb
+
+# Backup files
+*.bak
+*.backup
+*~
+
+# Configuration files with sensitive data
+config_local.yml
+config_personal.yml
+secrets.yml
+
+# Large data files
+*.pdb.gz
+*.cif.gz
+*.mmcif.gz
+structures/
+pdbs/
+complexes/
+
+# Rosetta files
+*.silent
+*.fasc
+*.pdb_*
+score.fsc
+
+# Checkpoint and restart files
+*.checkpoint
+*.restart
+check.point

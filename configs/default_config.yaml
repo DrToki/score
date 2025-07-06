@@ -1,0 +1,100 @@
+# Default configuration for unified protein scoring pipeline
+
+# Input processing settings
+input_processing:
+  auto_clean: true
+  auto_renumber: true
+  strict_validation: false
+  max_chains: 2
+
+# AF2 scoring settings
+af2_scoring:
+  model_name: "model_1_ptm"
+  num_recycles: 3
+  max_extra_msa: 5
+  max_msa_clusters: 5
+  use_initial_guess: true
+  max_amide_distance: 3.0
+
+# Rosetta scoring settings
+rosetta_scoring:
+  timeout: 3600
+  rosetta_path: null  # Will search PATH
+  temp_dir: null      # Will use system temp
+
+# Unified scoring settings
+unified_scoring:
+  scheme: "simple_weighted"
+  
+  # AF2 metric weights
+  af2_weights:
+    plddt_total: 0.3
+    plddt_binder: 0.2
+    pae_interaction: -0.3  # Negative because lower is better
+    binder_aligned_rmsd: -0.2  # Negative because lower is better
+  
+  # Rosetta metric weights
+  rosetta_weights:
+    total_score: -0.4  # Negative because lower is better
+    interface_score: -0.3  # Negative because lower is better
+    binding_energy: -0.3  # Negative because lower is better
+  
+  # Scheme-level weights
+  scheme_weights:
+    af2_contribution: 0.5
+    rosetta_contribution: 0.5
+  
+  # Normalization parameters for z-score normalization
+  normalization_params:
+    plddt_total:
+      mean: 70.0
+      std: 20.0
+    pae_interaction:
+      mean: 15.0
+      std: 10.0
+    total_score:
+      mean: -500.0
+      std: 200.0
+    interface_score:
+      mean: -20.0
+      std: 15.0
+
+# SLURM settings
+slurm:
+  default_partition: "cpu"
+  max_concurrent_jobs: 50
+  
+  # Default resource requests
+  default_resources:
+    af2_job:
+      partition: "gpu"
+      cpus_per_task: 8
+      memory: "32G"
+      time: "12:00:00"
+      gpu: "1"
+    
+    rosetta_job:
+      partition: "cpu"
+      cpus_per_task: 4
+      memory: "16G"
+      time: "8:00:00"
+    
+    pipeline_job:
+      partition: "gpu"
+      cpus_per_task: 8
+      memory: "48G"
+      time: "24:00:00"
+      gpu: "1"
+
+# Output settings
+output:
+  export_format: "csv"
+  generate_report: true
+  include_metadata: true
+  save_structures: false
+
+# Debug settings
+debug:
+  verbose: false
+  save_intermediate: false
+  log_level: "INFO"

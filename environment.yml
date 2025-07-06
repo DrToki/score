@@ -1,0 +1,19 @@
+name: protein_scoring
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+dependencies:
+  - python=3.9
+  - pip
+  - numpy
+  - biopython
+  - scipy
+  - pandas
+  - pip:
+    - jax[cpu]
+    - dm-haiku
+    - chex
+    - ml-collections
+    - immutabledict
+    - contextlib2

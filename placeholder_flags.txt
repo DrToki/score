@@ -1,0 +1,7 @@
+# PLACEHOLDER: Rosetta flags file
+# Will be populated with actual scoring flags
+
+-mute all
+-overwrite
+
+# Additional flags will be added here when XML protocol is finalized

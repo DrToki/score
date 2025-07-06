@@ -1,0 +1,127 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<RosettaScripts>
+    <!--
+    Sample Rosetta XML script for protein complex interface scoring
+    This script calculates interface energy, binding energy, and other metrics
+    -->
+    
+    <SCOREFXNS>
+        <!-- Standard Rosetta score function -->
+        <ScoreFunction name="ref15" weights="ref2015.wts"/>
+        
+        <!-- Score function with interface-specific terms -->
+        <ScoreFunction name="interface_score" weights="ref2015.wts">
+            <Reweight scoretype="fa_atr" weight="1.0"/>
+            <Reweight scoretype="fa_rep" weight="0.55"/>
+            <Reweight scoretype="fa_sol" weight="1.0"/>
+            <Reweight scoretype="fa_intra_rep" weight="0.005"/>
+            <Reweight scoretype="fa_elec" weight="1.0"/>
+            <Reweight scoretype="pro_close" weight="1.25"/>
+            <Reweight scoretype="hbond_sr_bb" weight="1.17"/>
+            <Reweight scoretype="hbond_lr_bb" weight="1.17"/>
+            <Reweight scoretype="hbond_bb_sc" weight="1.17"/>
+            <Reweight scoretype="hbond_sc" weight="1.1"/>
+            <Reweight scoretype="dslf_fa13" weight="1.25"/>
+            <Reweight scoretype="rama_prepro" weight="0.45"/>
+            <Reweight scoretype="omega" weight="0.4"/>
+            <Reweight scoretype="p_aa_pp" weight="0.6"/>
+            <Reweight scoretype="fa_dun" weight="0.7"/>
+            <Reweight scoretype="ref" weight="1.0"/>
+        </ScoreFunction>
+    </SCOREFXNS>
+    
+    <RESIDUE_SELECTORS>
+        <!-- Select chains -->
+        <Chain name="chainA" chains="A"/>
+        <Chain name="chainB" chains="B"/>
+        
+        <!-- Select interface residues -->
+        <Interface name="interface" chain1_selector="chainA" chain2_selector="chainB" distance="8.0"/>
+        
+        <!-- Select interface residues on each chain -->
+        <And name="interface_A" selectors="interface,chainA"/>
+        <And name="interface_B" selectors="interface,chainB"/>
+        
+        <!-- Select non-interface residues -->
+        <Not name="non_interface" selector="interface"/>
+    </RESIDUE_SELECTORS>
+    
+    <SIMPLE_METRICS>
+        <!-- Total energy metrics -->
+        <TotalEnergyMetric name="total_energy" scorefxn="ref15"/>
+        <TotalEnergyMetric name="total_energy_interface" scorefxn="interface_score"/>
+        
+        <!-- Interface energy metrics -->
+        <InteractionEnergyMetric name="interface_energy" residue_selector="interface" scorefxn="ref15"/>
+        <InteractionEnergyMetric name="interface_energy_detailed" residue_selector="interface" scorefxn="interface_score"/>
+        
+        <!-- Binding energy calculation -->
+        <InteractionEnergyMetric name="binding_energy" residue_selector1="chainA" residue_selector2="chainB" scorefxn="ref15"/>
+        
+        <!-- Per-chain energies -->
+        <TotalEnergyMetric name="chainA_energy" residue_selector="chainA" scorefxn="ref15"/>
+        <TotalEnergyMetric name="chainB_energy" residue_selector="chainB" scorefxn="ref15"/>
+        
+        <!-- Interface area and contacts -->
+        <SasaMetric name="interface_sasa" residue_selector="interface"/>
+        <SasaMetric name="total_sasa"/>
+        
+        <!-- Shape complementarity -->
+        <ShapeComplementarityMetric name="shape_complementarity" residue_selector1="interface_A" residue_selector2="interface_B"/>
+        
+        <!-- Hydrogen bonds -->
+        <HbondMetric name="interface_hbonds" residue_selector="interface"/>
+        <HbondMetric name="total_hbonds"/>
+        
+        <!-- Secondary structure metrics -->
+        <SecondaryStructureMetric name="ss_content"/>
+        
+        <!-- Radius of gyration -->
+        <RgMetric name="radius_gyration"/>
+        
+        <!-- RMSD (if reference structure available) -->
+        <!-- <RMSDMetric name="bb_rmsd" residue_selector="chainA" reference_name="native" rmsd_type="bb"/> -->
+    </SIMPLE_METRICS>
+    
+    <FILTERS>
+        <!-- Interface area filter -->
+        <Sasa name="interface_area_filter" threshold="1000" confidence="0"/>
+        
+        <!-- Shape complementarity filter -->
+        <ShapeComplementarity name="sc_filter" min_sc="0.6" confidence="0"/>
+        
+        <!-- Energy filters -->
+        <ScoreType name="total_score_filter" scorefxn="ref15" score_type="total_score" threshold="0" confidence="0"/>
+        <InterfaceBindingEnergyDensity name="binding_density_filter" threshold="-1.0" confidence="0"/>
+    </FILTERS>
+    
+    <MOVERS>
+        <!-- Relax the structure lightly -->
+        <FastRelax name="relax" scorefxn="ref15" repeats="1"/>
+        
+        <!-- Minimize interface -->
+        <MinMover name="minimize" scorefxn="ref15" chi="true" bb="false" jump="true"/>
+        
+        <!-- Null mover for scoring only -->
+        <Null name="null"/>
+    </MOVERS>
+    
+    <PROTOCOLS>
+        <!-- Option 1: Score without modification -->
+        <Add mover="null"/>
+        
+        <!-- Option 2: Light minimization before scoring -->
+        <!-- <Add mover="minimize"/> -->
+        
+        <!-- Option 3: Light relaxation before scoring -->
+        <!-- <Add mover="relax"/> -->
+        
+        <!-- Add filter checks -->
+        <Add filter="interface_area_filter"/>
+        <Add filter="sc_filter"/>
+        <Add filter="total_score_filter"/>
+        <Add filter="binding_density_filter"/>
+    </PROTOCOLS>
+    
+    <OUTPUT scorefxn="ref15"/>
+</RosettaScripts>

@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<RosettaScripts>
+    <!--
+    PLACEHOLDER: Simple scoring XML
+    Will be replaced with actual scoring protocol
+    -->
+    
+    <SCOREFXNS>
+        <ScoreFunction name="ref15" weights="ref2015.wts"/>
+    </SCOREFXNS>
+    
+    <SIMPLE_METRICS>
+        <TotalEnergyMetric name="total_energy" scorefxn="ref15"/>
+        <!-- More metrics will be added here -->
+    </SIMPLE_METRICS>
+    
+    <PROTOCOLS>
+        <Add mover_name="null"/>
+    </PROTOCOLS>
+    
+    <OUTPUT scorefxn="ref15"/>
+</RosettaScripts>

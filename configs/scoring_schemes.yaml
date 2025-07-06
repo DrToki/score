@@ -1,0 +1,188 @@
+# Different scoring schemes for unified protein complex scoring
+
+# Simple weighted scheme - basic linear combination
+simple_weighted:
+  af2_weights:
+    plddt_total: 0.3
+    plddt_binder: 0.2
+    pae_interaction: -0.3
+    binder_aligned_rmsd: -0.2
+  
+  rosetta_weights:
+    total_score: -0.4
+    interface_score: -0.3
+    binding_energy: -0.3
+  
+  scheme_weights:
+    af2_contribution: 0.5
+    rosetta_contribution: 0.5
+
+# Confidence-weighted scheme - weight by AF2 confidence
+confidence_weighted:
+  af2_weights:
+    plddt_total: 0.4
+    plddt_binder: 0.3
+    pae_interaction: -0.3
+  
+  rosetta_weights:
+    total_score: -0.5
+    interface_score: -0.3
+    binding_energy: -0.2
+  
+  scheme_weights:
+    confidence_threshold: 70.0  # pLDDT threshold for high confidence
+
+# AF2-favored scheme - emphasize AF2 predictions
+af2_favored:
+  af2_weights:
+    plddt_total: 0.4
+    plddt_binder: 0.3
+    pae_interaction: -0.3
+  
+  rosetta_weights:
+    total_score: -0.2
+    interface_score: -0.2
+    binding_energy: -0.1
+  
+  scheme_weights:
+    af2_contribution: 0.7
+    rosetta_contribution: 0.3
+
+# Rosetta-favored scheme - emphasize Rosetta energy
+rosetta_favored:
+  af2_weights:
+    plddt_total: 0.2
+    plddt_binder: 0.1
+    pae_interaction: -0.2
+  
+  rosetta_weights:
+    total_score: -0.5
+    interface_score: -0.4
+    binding_energy: -0.4
+  
+  scheme_weights:
+    af2_contribution: 0.3
+    rosetta_contribution: 0.7
+
+# Interface-focused scheme - emphasize interface metrics
+interface_focused:
+  af2_weights:
+    pae_interaction: -0.5
+    binder_aligned_rmsd: -0.3
+    plddt_binder: 0.2
+  
+  rosetta_weights:
+    interface_score: -0.6
+    binding_energy: -0.4
+  
+  scheme_weights:
+    af2_contribution: 0.5
+    rosetta_contribution: 0.5
+
+# Conservative scheme - balanced with lower weights
+conservative:
+  af2_weights:
+    plddt_total: 0.2
+    plddt_binder: 0.15
+    pae_interaction: -0.2
+    binder_aligned_rmsd: -0.15
+  
+  rosetta_weights:
+    total_score: -0.2
+    interface_score: -0.15
+    binding_energy: -0.15
+  
+  scheme_weights:
+    af2_contribution: 0.5
+    rosetta_contribution: 0.5
+
+# Aggressive scheme - higher weights for discrimination
+aggressive:
+  af2_weights:
+    plddt_total: 0.5
+    plddt_binder: 0.4
+    pae_interaction: -0.5
+    binder_aligned_rmsd: -0.3
+  
+  rosetta_weights:
+    total_score: -0.6
+    interface_score: -0.5
+    binding_energy: -0.4
+  
+  scheme_weights:
+    af2_contribution: 0.5
+    rosetta_contribution: 0.5
+
+# Normalization parameters for different datasets
+normalization_params:
+  # Parameters for typical binder design datasets
+  binder_design:
+    plddt_total:
+      mean: 75.0
+      std: 15.0
+    plddt_binder:
+      mean: 70.0
+      std: 20.0
+    pae_interaction:
+      mean: 12.0
+      std: 8.0
+    binder_aligned_rmsd:
+      mean: 2.5
+      std: 1.5
+    total_score:
+      mean: -600.0
+      std: 150.0
+    interface_score:
+      mean: -25.0
+      std: 12.0
+    binding_energy:
+      mean: -15.0
+      std: 10.0
+  
+  # Parameters for antibody-antigen complexes
+  antibody_antigen:
+    plddt_total:
+      mean: 80.0
+      std: 12.0
+    plddt_binder:
+      mean: 75.0
+      std: 15.0
+    pae_interaction:
+      mean: 10.0
+      std: 6.0
+    binder_aligned_rmsd:
+      mean: 2.0
+      std: 1.2
+    total_score:
+      mean: -800.0
+      std: 200.0
+    interface_score:
+      mean: -30.0
+      std: 15.0
+    binding_energy:
+      mean: -20.0
+      std: 12.0
+  
+  # Parameters for protein-protein interfaces
+  protein_protein:
+    plddt_total:
+      mean: 70.0
+      std: 20.0
+    plddt_binder:
+      mean: 65.0
+      std: 25.0
+    pae_interaction:
+      mean: 15.0
+      std: 10.0
+    binder_aligned_rmsd:
+      mean: 3.0
+      std: 2.0
+    total_score:
+      mean: -500.0
+      std: 250.0
+    interface_score:
+      mean: -20.0
+      std: 18.0
+    binding_energy:
+      mean: -12.0
+      std: 15.0

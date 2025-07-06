@@ -1,0 +1,26 @@
+name: af2_binder_full
+channels:
+  - https://USERNAME:PASSWORD@conda.graylab.jhu.edu
+  - conda-forge
+  - pytorch
+  - nvidia
+  - defaults
+dependencies:
+  - python=3.9
+  - numpy
+  - scipy
+  - matplotlib
+  - biopython
+  - pyrosetta
+  - pytorch
+  - torchvision 
+  - torchaudio
+  - pytorch-cuda=12.1
+  - pip
+  - pip:
+    - jax[cuda12_pip]
+    - dm-haiku
+    - chex
+    - ml-collections
+    - immutabledict
+    - absl-py

@@ -1,0 +1,56 @@
+name: af2_binder_minimal_cuda11
+channels:
+  - conda-forge
+  - pytorch
+  - nvidia
+  - defaults
+dependencies:
+  # Core Python and data science
+  - python=3.9
+  - numpy
+  - scipy
+  - matplotlib
+  - pandas
+  
+  # Structure handling
+  - biopython
+  
+  # Deep learning frameworks (CUDA 11 version)
+  - pytorch
+  - torchvision 
+  - torchaudio
+  - pytorch-cuda=11.8
+  
+  # TensorFlow (required by AlphaFold2)
+  - tensorflow
+  
+  # Basic utilities
+  - pip
+  - wget
+  - git
+  
+  # Python packages via pip
+  - pip:
+    # JAX ecosystem (CUDA 11 support)
+    - jax[cuda11_pip]==0.4.20
+    - jaxlib
+    
+    # Haiku and related
+    - dm-haiku
+    - dm-tree
+    
+    # ML utilities required by AF2
+    - ml-collections
+    - ml_dtypes
+    - chex
+    - immutabledict
+    
+    # AbsL (Google utilities)
+    - absl-py
+    
+    # Data handling
+    - tree
+    
+    # Optional but useful
+    - tqdm
+    - requests
