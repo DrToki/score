@@ -57,14 +57,51 @@ sys.path.append(os.path.join(os.path.dirname(__file__), 'af2_initial_guess'))
 from simple_structure import SimpleStructure
 import af2_util
 
+# Import AF2 prediction functionality
+import jax
+import jax.numpy as jnp
+from alphafold.common import residue_constants
+from alphafold.common import protein
+from alphafold.common import confidence
+from alphafold.data import pipeline
+from alphafold.model import data
+from alphafold.model import config
+from alphafold.model import model
+from timeit import default_timer as timer
+import uuid
+import json
+import shutil
+
 class SimpleScorer:
     """Simple unified scorer - no over-engineering"""
     
     def __init__(self, rosetta_path: str = "rosetta_scripts", xml_script: str = None, 
-                 use_ipsae: bool = True):
+                 use_ipsae: bool = True, af2_predictions_dir: str = "af2_predictions"):
         self.rosetta_path = rosetta_path
         self.xml_script = xml_script  # Will be provided later
         self.use_ipsae = use_ipsae
+        self.af2_predictions_dir = af2_predictions_dir
+        self._setup_af2_model()
+        
+        # Create predictions directory if it doesn't exist
+        os.makedirs(self.af2_predictions_dir, exist_ok=True)
+    
+    def _setup_af2_model(self):
+        """Setup AF2 model for predictions"""
+        model_name = "model_1_ptm"
+        model_config = config.model_config(model_name)
+        model_config.data.eval.num_ensemble = 1
+        model_config.data.common.num_recycle = 3
+        model_config.model.num_recycle = 3
+        model_config.model.embeddings_and_evoformer.initial_guess = True
+        model_config.data.common.max_extra_msa = 5
+        model_config.data.eval.max_msa_clusters = 5
+        
+        params_dir = os.path.join(os.path.dirname(__file__), 'af2_initial_guess', 'model_weights')
+        model_params = data.get_model_haiku_params(model_name=model_name, data_dir=params_dir)
+        
+        self.model_runner = model.RunModel(model_config, model_params)
+        self.tmp_fn = f'tmp_{uuid.uuid4()}.pdb'
         
     def score_complex(self, pdb_file: str, tag: str) -> ScoreResults:
         """Score a single complex with AF2 + Rosetta + ipSAE"""
@@ -72,16 +109,19 @@ class SimpleScorer:
         # Step 1: Load structure (use existing code)
         structure = SimpleStructure(pdb_file)
         
-        # Step 2: Run AF2 scoring (use existing AF2 code)
-        af2_scores = self._run_af2(structure, tag)
+        # Step 2: Run AF2 prediction to generate predicted structure
+        af2_predicted_pdb = self._run_af2_prediction(structure, tag)
         
-        # Step 3: Run Rosetta scoring (placeholder for now)
-        rosetta_scores = self._run_rosetta(pdb_file, tag)
+        # Step 3: Run AF2 scoring on predicted structure
+        af2_scores = self._run_af2_scoring(af2_predicted_pdb, tag)
         
-        # Step 4: Run ipSAE interface scoring
-        ipsae_scores = self._run_ipsae(pdb_file, tag) if self.use_ipsae else {}
+        # Step 4: Run Rosetta scoring on predicted structure
+        rosetta_scores = self._run_rosetta(af2_predicted_pdb, tag)
         
-        # Step 5: Combine scores (simple weighted sum)
+        # Step 5: Run ipSAE interface scoring on predicted structure
+        ipsae_scores = self._run_ipsae(af2_predicted_pdb, tag) if self.use_ipsae else {}
+        
+        # Step 6: Combine scores (simple weighted sum)
         unified_score = self._combine_scores(af2_scores, rosetta_scores, ipsae_scores)
         
         return ScoreResults(
@@ -96,10 +136,118 @@ class SimpleScorer:
             is_monomer=af2_scores.is_monomer
         )
     
-    def _run_af2(self, structure: SimpleStructure, tag: str) -> AF2Scores:
-        """Run AF2 scoring using simplified AF2 code"""
+    def _run_af2_prediction(self, structure: SimpleStructure, tag: str) -> str:
+        """Run AF2 prediction to generate predicted structure"""
         
         try:
+            # Generate output filename
+            af2_predicted_pdb = os.path.join(self.af2_predictions_dir, f"{tag}_af2pred.pdb")
+            
+            # Skip if already exists
+            if os.path.exists(af2_predicted_pdb):
+                print(f"AF2 prediction already exists for {tag}, skipping prediction")
+                return af2_predicted_pdb
+            
+            # Determine structure properties
+            chains = structure.split_by_chain()
+            is_monomer = len(chains) == 1
+            binder_length = chains[0].size() if not is_monomer else -1
+            
+            # Generate AF2 features
+            all_atom_positions, all_atom_masks = structure.get_atoms_for_af2()
+            initial_guess = af2_util.parse_initial_guess(all_atom_positions)
+            
+            # Determine which residues to template
+            sequence = structure.sequence()
+            if is_monomer:
+                residue_mask = [False for _ in range(len(sequence))]
+            else:
+                residue_mask = [i >= binder_length for i in range(len(sequence))]
+            
+            # Generate template features
+            template_dict = af2_util.generate_template_features(
+                sequence, all_atom_positions, all_atom_masks, residue_mask
+            )
+            
+            # Create feature dictionary
+            feature_dict = {
+                **pipeline.make_sequence_features(sequence=sequence, description="none", num_res=len(sequence)),
+                **pipeline.make_msa_features(msas=[[sequence]], deletion_matrices=[[[0]*len(sequence)]]),
+                **template_dict
+            }
+            
+            # Handle chain breaks
+            if not is_monomer:
+                breaks = af2_util.check_residue_distances(all_atom_positions, all_atom_masks, 3.0)
+                feature_dict['residue_index'] = af2_util.insert_truncations(feature_dict['residue_index'], breaks)
+            
+            feature_dict = self.model_runner.process_features(feature_dict, random_seed=0)
+            
+            # Run AF2 prediction
+            print(f"Running AF2 prediction for {tag}...")
+            prediction_result = self.model_runner.apply(
+                self.model_runner.params,
+                jax.random.PRNGKey(0),
+                feature_dict,
+                initial_guess
+            )
+            
+            # Extract structure from prediction
+            structure_module = prediction_result['structure_module']
+            predicted_protein = protein.Protein(
+                aatype=feature_dict['aatype'][0],
+                atom_positions=structure_module['final_atom_positions'][...],
+                atom_mask=structure_module['final_atom_mask'][...],
+                residue_index=feature_dict['residue_index'][0] + 1,
+                b_factors=np.zeros_like(structure_module['final_atom_mask'][...])
+            )
+            
+            # Extract confidence scores for psae.py
+            confidences = {}
+            confidences['plddt'] = confidence.compute_plddt(prediction_result['predicted_lddt']['logits'])
+            
+            if 'predicted_aligned_error' in prediction_result:
+                confidences.update(confidence.compute_predicted_aligned_error(
+                    prediction_result['predicted_aligned_error']['logits'],
+                    prediction_result['predicted_aligned_error']['breaks']
+                ))
+            
+            # Save PAE matrix as JSON for psae.py
+            af2_pae_json = af2_predicted_pdb.replace('.pdb', '_scores.json')
+            pae_data = {
+                'plddt': confidences['plddt'].tolist(),
+                'predicted_aligned_error': confidences.get('predicted_aligned_error', []).tolist() if 'predicted_aligned_error' in confidences else [],
+                'pae': confidences.get('predicted_aligned_error', []).tolist() if 'predicted_aligned_error' in confidences else []
+            }
+            
+            # Add PTM scores if available
+            if 'ptm' in prediction_result:
+                pae_data['ptm'] = float(prediction_result['ptm'])
+            if 'iptm' in prediction_result:
+                pae_data['iptm'] = float(prediction_result['iptm'])
+            
+            with open(af2_pae_json, 'w') as f:
+                json.dump(pae_data, f, indent=2)
+            
+            # Save predicted structure
+            predicted_pdb_lines = protein.to_pdb(predicted_protein)
+            with open(af2_predicted_pdb, 'w') as f:
+                f.write(predicted_pdb_lines)
+            
+            print(f"AF2 prediction saved to {af2_predicted_pdb}")
+            print(f"AF2 PAE matrix saved to {af2_pae_json}")
+            return af2_predicted_pdb
+            
+        except Exception as e:
+            print(f"AF2 prediction failed for {tag}: {e}")
+            # Return original structure if prediction fails
+            return structure.pdb_file
+    
+    def _run_af2_scoring(self, pdb_file: str, tag: str) -> AF2Scores:
+        """Run AF2 scoring on predicted structure"""
+        
+        try:
+            structure = SimpleStructure(pdb_file)
             from af2_no_pyrosetta import AF2ScorerSimple
             scorer = AF2ScorerSimple()
             af2_dict = scorer.score_structure(structure)
@@ -115,6 +263,7 @@ class SimpleScorer:
         except Exception as e:
             print(f"AF2 scoring failed for {tag}: {e}")
             # Return reasonable defaults
+            structure = SimpleStructure(pdb_file)
             chains = structure.split_by_chain()
             return AF2Scores(
                 plddt_total=50.0,
@@ -141,13 +290,28 @@ class SimpleScorer:
             temp_path = Path(temp_dir)
             score_file = temp_path / f"{tag}_scores.sc"
             
-            # Run Rosetta command
+            # Run Rosetta command with specified flags
             cmd = [
                 self.rosetta_path,
                 '-s', pdb_file,
                 '-parser:protocol', self.xml_script,
                 '-out:file:scorefile', str(score_file),
                 '-overwrite',
+                '-mh:score:use_ss1', 'true',
+                '-mh:score:use_ss2', 'true',
+                '-mh:score:use_aa1', 'false',
+                '-mh:score:use_aa2', 'false',
+                '-mh:path:motifs', '/net/software/Rosetta/main/database/additional_protocol_data/sewing/xsmax_bb_ss_AILV_resl0.8_msc0.3/xsmax_bb_ss_AILV_resl0.8_msc0.3.rpm.bin.gz',
+                '-mh:path:scores_BB_BB', '/net/software/Rosetta/main/database/additional_protocol_data/sewing/xsmax_bb_ss_AILV_resl0.8_msc0.3/xsmax_bb_ss_AILV_resl0.8_msc0.3',
+                '-mh:gen_reverse_motifs_on_load', 'false',
+                '-corrections:beta_nov16',
+                '-scorefile_format', 'json',
+                '-load_PDB_components', 'false',
+                '-ignore_zero_occupancy', 'false',
+                '-out:file:output_secondary_structure', 'true',
+                '-skip_connect_info',
+                '-out:file:do_not_autoassign_SS',
+                '-output_pose_cache_data',
                 '-mute', 'all'
             ]
             
@@ -183,28 +347,101 @@ class SimpleScorer:
         )
     
     def _run_ipsae(self, pdb_file: str, tag: str) -> IPSAEScores:
-        """Run ipSAE interface scoring"""
+        """Run ipSAE interface scoring using psae.py"""
         
         try:
-            from ipsae_simple import IPSAEScorer
-            scorer = IPSAEScorer()
-            ipsae_dict = scorer.score_interface(pdb_file)
+            # Look for corresponding PAE JSON file
+            pae_file = pdb_file.replace('.pdb', '_scores.json')
+            if not os.path.exists(pae_file):
+                print(f"PAE file not found for {tag}: {pae_file}")
+                raise FileNotFoundError(f"PAE file not found: {pae_file}")
             
-            return IPSAEScores(
-                ipsae_score=ipsae_dict['ipsae_score'],
-                pdockq_score=ipsae_dict['pdockq_score'],
-                lis_score=ipsae_dict['lis_score'],
-                interface_pae=ipsae_dict['interface_pae']
-            )
+            # Run psae.py as subprocess
+            import subprocess
+            import tempfile
+            
+            # Create temp output directory to capture psae.py results
+            with tempfile.TemporaryDirectory() as temp_dir:
+                temp_pdb = os.path.join(temp_dir, f"{tag}.pdb")
+                temp_pae = os.path.join(temp_dir, f"{tag}_scores.json")
+                
+                # Copy files to temp directory
+                import shutil
+                shutil.copy2(pdb_file, temp_pdb)
+                shutil.copy2(pae_file, temp_pae)
+                
+                # Run psae.py
+                cmd = [
+                    'python', 'psae.py',
+                    temp_pae, temp_pdb,
+                    '10', '10'  # pae_cutoff, dist_cutoff
+                ]
+                
+                result = subprocess.run(cmd, capture_output=True, text=True, cwd=os.path.dirname(__file__))
+                
+                if result.returncode != 0:
+                    print(f"psae.py failed for {tag}: {result.stderr}")
+                    raise Exception(f"psae.py failed: {result.stderr}")
+                
+                # Parse the output file
+                output_file = os.path.join(temp_dir, f"{tag}_10_10.txt")
+                if os.path.exists(output_file):
+                    return self._parse_psae_output(output_file)
+                else:
+                    raise Exception(f"psae.py output file not found: {output_file}")
             
         except Exception as e:
             print(f"ipSAE scoring failed for {tag}: {e}")
-            return IPSAEScores(
-                ipsae_score=0.5,
-                pdockq_score=0.5,
-                lis_score=0.5,
-                interface_pae=15.0
-            )
+            # Try fallback to simple ipSAE implementation
+            try:
+                from ipsae_simple import IPSAEScorer
+                scorer = IPSAEScorer()
+                ipsae_dict = scorer.score_interface(pdb_file)
+                
+                return IPSAEScores(
+                    ipsae_score=ipsae_dict['ipsae_score'],
+                    pdockq_score=ipsae_dict['pdockq_score'],
+                    lis_score=ipsae_dict['lis_score'],
+                    interface_pae=ipsae_dict['interface_pae']
+                )
+            except Exception:
+                return IPSAEScores(
+                    ipsae_score=0.5,
+                    pdockq_score=0.5,
+                    lis_score=0.5,
+                    interface_pae=15.0
+                )
+    
+    def _parse_psae_output(self, output_file: str) -> IPSAEScores:
+        """Parse psae.py output file to extract scores"""
+        ipsae_score = 0.5
+        pdockq_score = 0.5
+        lis_score = 0.5
+        interface_pae = 15.0
+        
+        try:
+            with open(output_file, 'r') as f:
+                lines = f.readlines()
+            
+            # Parse the output - look for the "max" line which has the best scores
+            for line in lines:
+                if 'max' in line and not line.startswith('#'):
+                    parts = line.strip().split()
+                    if len(parts) >= 13:
+                        ipsae_score = float(parts[5])  # ipSAE column
+                        pdockq_score = float(parts[9])  # pDockQ column
+                        lis_score = float(parts[11])  # LIS column
+                        # interface_pae would need to be calculated from PAE data
+                        break
+        except Exception as e:
+            print(f"Error parsing psae.py output: {e}")
+        
+        return IPSAEScores(
+            ipsae_score=ipsae_score,
+            pdockq_score=pdockq_score,
+            lis_score=lis_score,
+            interface_pae=interface_pae
+        )
     
     def _combine_scores(self, af2_scores: AF2Scores, rosetta_scores: RosettaScores, ipsae_scores: IPSAEScores = None) -> float:
         """Simple weighted combination"""
@@ -249,7 +486,7 @@ def main():
     
     # Initialize scorer
     scorer = SimpleScorer(rosetta_path=args.rosetta_path, xml_script=args.xml_script, 
-                         use_ipsae=not args.no_ipsae)
+                         use_ipsae=not args.no_ipsae, af2_predictions_dir="af2_predictions")
     
     # Get PDB files
     pdb_path = Path(args.pdb)

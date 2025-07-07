@@ -10,8 +10,6 @@ from alphafold.common import residue_constants
 
 import jax.numpy as jnp
 
-from pyrosetta import *
-from rosetta import *
 # I don't think we need to call init() here but I'm not sure
 
 def get_seq_from_pdb( pdb_fn ) -> str:
@@ -245,31 +243,6 @@ def add2scorefile(tag, scorefilename, write_header=False, score_dict=None, strin
         scores_string = " ".join(final_dict.values())
         f.write("SCORE:     %s        %s\n"%(scores_string, tag))
 
-def insert_Rosetta_chainbreaks( pose, binderlen ) -> core.pose.Pose:
-    '''
-    Given a pose and a list of indices to insert chainbreaks after,
-    insert the chainbreaks into the pose.
-
-    Args:
-        pose (Pose)      : The pose to insert chainbreaks into.
-
-        binderlen (list) : The length of the binder chain
-    '''
-
-    conf = pose.conformation()
-    conf.insert_chain_ending( binderlen )
-
-    pose.set_new_conformation( conf )
-
-    splits = pose.split_by_chain()
-    newpose = splits[1]
-    for i in range( 2, len( splits )+1 ):
-        newpose.append_pose_by_jump( splits[i], newpose.size() )
- 
-    info = core.pose.PDBInfo( newpose, True )
-    newpose.pdb_info( info )
-
-    return newpose
 
 def check_residue_distances(all_positions, all_positions_mask, max_amide_distance) -> list:
     '''
