@@ -256,7 +256,7 @@ class SimpleScorer:
                 plddt_total=af2_dict['plddt_total'],
                 plddt_binder=af2_dict['plddt_binder'], 
                 pae_interaction=af2_dict['pae_interaction'],
-                binder_aligned_rmsd=2.5,  # Placeholder for now
+                binder_aligned_rmsd=af2_dict['binder_aligned_rmsd'],
                 binder_length=af2_dict['binder_length'],
                 is_monomer=af2_dict['is_monomer']
             )

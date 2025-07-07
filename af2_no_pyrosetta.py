@@ -73,8 +73,8 @@ class AF2ScorerSimple:
             initial_guess
         )
         
-        # Extract scores
-        return self._extract_scores(prediction_result, is_monomer, binder_length)
+        # Extract scores (now including RMSD calculation)
+        return self._extract_scores(prediction_result, feature_dict, all_atom_positions, is_monomer, binder_length)
     
     def _generate_features(self, sequence: str, all_atom_positions: np.ndarray, 
                           all_atom_masks: np.ndarray, is_monomer: bool, binder_length: int):
@@ -109,7 +109,8 @@ class AF2ScorerSimple:
         
         return feature_dict, initial_guess
     
-    def _extract_scores(self, prediction_result: dict, is_monomer: bool, binder_length: int) -> dict:
+    def _extract_scores(self, prediction_result: dict, feature_dict: dict, 
+                       initial_atom_positions: np.ndarray, is_monomer: bool, binder_length: int) -> dict:
         """Extract confidence scores from prediction"""
         
         # Calculate confidence scores
@@ -139,10 +140,38 @@ class AF2ScorerSimple:
             else:
                 pae_interaction = 15.0  # Default value if arrays are wrong size
         
+        # Calculate RMSD between initial and predicted coordinates
+        binder_aligned_rmsd = 2.5  # Default fallback
+        
+        try:
+            # Extract predicted coordinates from AF2 result
+            structure_module = prediction_result['structure_module']
+            predicted_atom_positions = structure_module['final_atom_positions']
+            
+            # Create target mask for RMSD calculation
+            sequence_length = len(plddt_array)
+            target_mask = np.zeros(sequence_length, dtype=bool)
+            if not is_monomer and binder_length < sequence_length:
+                target_mask[binder_length:] = True
+            
+            # Calculate RMSD using existing AF2 util function
+            rmsds = af2_util.calculate_rmsds(
+                initial_atom_positions,
+                predicted_atom_positions,
+                target_mask
+            )
+            
+            binder_aligned_rmsd = float(rmsds['binder_aligned_rmsd'])
+            
+        except Exception as e:
+            print(f"RMSD calculation failed: {e}")
+            binder_aligned_rmsd = 2.5  # Use fallback value
+        
         return {
             'plddt_total': float(plddt_total),
             'plddt_binder': float(plddt_binder),
             'pae_interaction': float(pae_interaction),
+            'binder_aligned_rmsd': binder_aligned_rmsd,
             'binder_length': binder_length,
             'is_monomer': is_monomer
         }
