@@ -54,33 +54,46 @@ class ScoreResults:
 
 # Use existing AF2 code
 sys.path.append(os.path.join(os.path.dirname(__file__), 'af2_initial_guess'))
-from simple_structure import SimpleStructure
-import af2_util
 
-# Import AF2 prediction functionality
-import jax
-import jax.numpy as jnp
-from alphafold.common import residue_constants
-from alphafold.common import protein
-from alphafold.common import confidence
-from alphafold.data import pipeline
-from alphafold.model import data
-from alphafold.model import config
-from alphafold.model import model
-from timeit import default_timer as timer
-import uuid
-import json
-import shutil
+# Import core dependencies with error handling
+try:
+    from simple_structure import SimpleStructure
+    import af2_util
+    from timeit import default_timer as timer
+    import uuid
+    import json
+    import shutil
+except ImportError as e:
+    print(f"Error importing core dependencies: {e}")
+    sys.exit(1)
+
+# Import AF2 prediction functionality with error handling
+try:
+    import jax
+    import jax.numpy as jnp
+    from alphafold.common import residue_constants
+    from alphafold.common import protein
+    from alphafold.common import confidence
+    from alphafold.data import pipeline
+    from alphafold.model import data
+    from alphafold.model import config
+    from alphafold.model import model
+    AF2_AVAILABLE = True
+except ImportError as e:
+    print(f"Warning: AF2 dependencies not available: {e}")
+    AF2_AVAILABLE = False
 
 class SimpleScorer:
     """Simple unified scorer - no over-engineering"""
     
     def __init__(self, rosetta_path: str = "rosetta_scripts", xml_script: str = None, 
-                 use_ipsae: bool = True, af2_predictions_dir: str = "af2_predictions"):
+                 use_ipsae: bool = True, af2_predictions_dir: str = "af2_predictions",
+                 rosetta_database_dir: str = None):
         self.rosetta_path = rosetta_path
         self.xml_script = xml_script  # Will be provided later
         self.use_ipsae = use_ipsae
         self.af2_predictions_dir = af2_predictions_dir
+        self.rosetta_database_dir = rosetta_database_dir or "/net/software/Rosetta/main/database"
         self._setup_af2_model()
         
         # Create predictions directory if it doesn't exist
@@ -88,6 +101,11 @@ class SimpleScorer:
     
     def _setup_af2_model(self):
         """Setup AF2 model for predictions"""
+        if not AF2_AVAILABLE:
+            print("Warning: AF2 not available, predictions will be skipped")
+            self.model_runner = None
+            return
+            
         model_name = "model_1_ptm"
         model_config = config.model_config(model_name)
         model_config.data.eval.num_ensemble = 1
@@ -101,7 +119,6 @@ class SimpleScorer:
         model_params = data.get_model_haiku_params(model_name=model_name, data_dir=params_dir)
         
         self.model_runner = model.RunModel(model_config, model_params)
-        self.tmp_fn = f'tmp_{uuid.uuid4()}.pdb'
         
     def score_complex(self, pdb_file: str, tag: str) -> ScoreResults:
         """Score a single complex with AF2 + Rosetta + ipSAE"""
@@ -119,7 +136,7 @@ class SimpleScorer:
         rosetta_scores = self._run_rosetta(af2_predicted_pdb, tag)
         
         # Step 5: Run ipSAE interface scoring on predicted structure
-        ipsae_scores = self._run_ipsae(af2_predicted_pdb, tag) if self.use_ipsae else {}
+        ipsae_scores = self._run_ipsae(af2_predicted_pdb, tag) if self.use_ipsae else None
         
         # Step 6: Combine scores (simple weighted sum)
         unified_score = self._combine_scores(af2_scores, rosetta_scores, ipsae_scores)
@@ -138,6 +155,10 @@ class SimpleScorer:
     
     def _run_af2_prediction(self, structure: SimpleStructure, tag: str) -> str:
         """Run AF2 prediction to generate predicted structure"""
+        
+        if not AF2_AVAILABLE or self.model_runner is None:
+            print(f"AF2 not available, skipping prediction for {tag}")
+            return structure.pdb_file
         
         try:
             # Generate output filename
@@ -290,6 +311,12 @@ class SimpleScorer:
             temp_path = Path(temp_dir)
             score_file = temp_path / f"{tag}_scores.sc"
             
+            # Build motif paths using configurable database directory
+            motif_path = os.path.join(self.rosetta_database_dir, 
+                                     'additional_protocol_data/sewing/xsmax_bb_ss_AILV_resl0.8_msc0.3/xsmax_bb_ss_AILV_resl0.8_msc0.3.rpm.bin.gz')
+            scores_path = os.path.join(self.rosetta_database_dir,
+                                      'additional_protocol_data/sewing/xsmax_bb_ss_AILV_resl0.8_msc0.3/xsmax_bb_ss_AILV_resl0.8_msc0.3')
+            
             # Run Rosetta command with specified flags
             cmd = [
                 self.rosetta_path,
@@ -301,8 +328,8 @@ class SimpleScorer:
                 '-mh:score:use_ss2', 'true',
                 '-mh:score:use_aa1', 'false',
                 '-mh:score:use_aa2', 'false',
-                '-mh:path:motifs', '/net/software/Rosetta/main/database/additional_protocol_data/sewing/xsmax_bb_ss_AILV_resl0.8_msc0.3/xsmax_bb_ss_AILV_resl0.8_msc0.3.rpm.bin.gz',
-                '-mh:path:scores_BB_BB', '/net/software/Rosetta/main/database/additional_protocol_data/sewing/xsmax_bb_ss_AILV_resl0.8_msc0.3/xsmax_bb_ss_AILV_resl0.8_msc0.3',
+                '-mh:path:motifs', motif_path,
+                '-mh:path:scores_BB_BB', scores_path,
                 '-mh:gen_reverse_motifs_on_load', 'false',
                 '-corrections:beta_nov16',
                 '-scorefile_format', 'json',
@@ -357,7 +384,6 @@ class SimpleScorer:
                 raise FileNotFoundError(f"PAE file not found: {pae_file}")
             
             # Run psae.py as subprocess
-            import subprocess
             import tempfile
             
             # Create temp output directory to capture psae.py results
@@ -366,7 +392,6 @@ class SimpleScorer:
                 temp_pae = os.path.join(temp_dir, f"{tag}_scores.json")
                 
                 # Copy files to temp directory
-                import shutil
                 shutil.copy2(pdb_file, temp_pdb)
                 shutil.copy2(pae_file, temp_pae)
                 
@@ -480,13 +505,15 @@ def main():
     parser.add_argument("--xml_script", help="Rosetta XML script (optional)")
     parser.add_argument("--output", default="scores.csv", help="Output CSV file")
     parser.add_argument("--rosetta_path", default="rosetta_scripts", help="Rosetta executable")
+    parser.add_argument("--rosetta_database_dir", help="Rosetta database directory")
     parser.add_argument("--no_ipsae", action="store_true", help="Disable ipSAE interface scoring")
     
     args = parser.parse_args()
     
     # Initialize scorer
     scorer = SimpleScorer(rosetta_path=args.rosetta_path, xml_script=args.xml_script, 
-                         use_ipsae=not args.no_ipsae, af2_predictions_dir="af2_predictions")
+                         use_ipsae=not args.no_ipsae, af2_predictions_dir="af2_predictions",
+                         rosetta_database_dir=args.rosetta_database_dir)
     
     # Get PDB files
     pdb_path = Path(args.pdb)
