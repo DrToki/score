@@ -207,21 +207,38 @@ class SimpleScorer:
             # Prepare structure using robust handler if available
             prepared_structure = self._prepare_structure_for_prediction(structure, tag)
             
-            # Determine structure properties from prepared structure
-            chains = prepared_structure.split_by_chain()
-            is_monomer = len(chains) == 1
-            binder_length = chains[0].size() if not is_monomer else -1
+            # Analyze chain structure to get proper indices
+            chain_info = self._analyze_chain_structure(prepared_structure, tag)
+            
+            # Use chain analysis results for proper indexing
+            is_monomer = chain_info['is_monomer']
+            binder_length = chain_info['binder_length'] if not is_monomer else -1
+            
+            # Validate chain indices are handled correctly
+            if not self._validate_chain_indices(prepared_structure, chain_info, tag):
+                print(f"⚠️  Chain index validation failed for {tag}, using fallback")
+                # Use basic fallback values
+                chains = prepared_structure.split_by_chain()
+                is_monomer = len(chains) == 1
+                binder_length = chains[0].size() if not is_monomer else -1
+            
+            # Store chain info for downstream use
+            self._current_chain_info = chain_info
             
             # Generate AF2 features from prepared structure
             all_atom_positions, all_atom_masks = prepared_structure.get_atoms_for_af2()
             initial_guess = af2_util.parse_initial_guess(all_atom_positions)
             
-            # Determine which residues to template
+            # Determine which residues to template using chain analysis
             sequence = prepared_structure.sequence()
             if is_monomer:
                 residue_mask = [False for _ in range(len(sequence))]
             else:
+                # Template the target chain (after binder_length)
+                # Note: prepare_structure_for_af2 puts binder first, then target
                 residue_mask = [i >= binder_length for i in range(len(sequence))]
+                print(f"🎯 Templating residues {binder_length} to {len(sequence)-1} (target chain)")
+                print(f"   Binder residues 0 to {binder_length-1} will be predicted freely")
             
             # Generate template features
             template_dict = af2_util.generate_template_features(
@@ -312,12 +329,38 @@ class SimpleScorer:
         try:
             print(f"📋 Preparing structure for {tag} using robust handler...")
             
+            # Get original chain information before preparation
+            original_chains = structure.split_by_chain()
+            print(f"   Original structure: {len(original_chains)} chains")
+            
+            if len(original_chains) == 2:
+                # Get original chain IDs
+                original_chain_ids = []
+                for chain in original_chains:
+                    try:
+                        chain_id = list(chain.structure.get_chains())[0].get_id()
+                        original_chain_ids.append(chain_id)
+                    except:
+                        original_chain_ids.append("unknown")
+                        
+                print(f"   Original chain IDs: {original_chain_ids}")
+                print(f"   Original chain sizes: {[chain.size() for chain in original_chains]}")
+            
             # Use robust structure preparation
             prepared_structure = prepare_structure_for_af2(
                 structure.pdb_file,
                 auto_clean=self.auto_clean,
                 auto_renumber=self.auto_renumber
             )
+            
+            # Show what happened during preparation
+            prepared_chains = prepared_structure.split_by_chain()
+            print(f"   Prepared structure: {len(prepared_chains)} chains")
+            
+            if len(prepared_chains) == 2:
+                print(f"   🔄 Chain order after preparation: binder (index 0), target (index 1)")
+                print(f"   🔄 Chain sizes after preparation: {[chain.size() for chain in prepared_chains]}")
+                print(f"   📋 Note: prepare_structure_for_af2 automatically puts binder first, target second")
             
             # Validate the prepared structure
             validation_report = self.structure_handler.validate_structure(prepared_structure)
@@ -348,38 +391,42 @@ class SimpleScorer:
             'total_residues': structure.size(),
             'binder_idx': None,
             'target_idx': None,
-            'binder_length': None
+            'binder_length': None,
+            'original_chain_ids': [],
+            'renumbered_structure': True  # Flag to indicate if structure was renumbered
         }
         
-        if ROBUST_HANDLER_AVAILABLE and self.structure_handler and len(chains) == 2:
-            try:
-                # Use robust handler for chain detection
-                binder_idx, target_idx = self.structure_handler.auto_detect_binder_target(structure)
-                chain_info['binder_idx'] = binder_idx
-                chain_info['target_idx'] = target_idx
-                chain_info['binder_length'] = chains[binder_idx].size()
-                
-                print(f"🔍 Chain analysis for {tag}:")
-                print(f"   Binder (chain {binder_idx}): {chains[binder_idx].size()} residues")
-                print(f"   Target (chain {target_idx}): {chains[target_idx].size()} residues")
-                
-            except Exception as e:
-                print(f"⚠️  Chain auto-detection failed for {tag}: {e}")
-                print(f"   Using basic chain order (binder=0, target=1)")
-                chain_info['binder_idx'] = 0
-                chain_info['target_idx'] = 1
-                chain_info['binder_length'] = chains[0].size()
+        # Get original chain IDs if available
+        try:
+            for i, chain in enumerate(chains):
+                chain_id = getattr(chain, 'original_chain_id', None)
+                if chain_id is None:
+                    # Try to get current chain ID
+                    chain_structures = chain.split_by_chain() if hasattr(chain, 'split_by_chain') else []
+                    if chain_structures:
+                        chain_id = list(chain_structures[0].structure.get_chains())[0].get_id()
+                    else:
+                        chain_id = chr(65 + i)  # Default to A, B, C...
+                chain_info['original_chain_ids'].append(chain_id)
+        except Exception:
+            chain_info['original_chain_ids'] = [chr(65 + i) for i in range(len(chains))]
         
-        elif len(chains) == 2:
-            # Fallback to basic detection
-            chain_info['binder_idx'] = 0
-            chain_info['target_idx'] = 1
-            chain_info['binder_length'] = chains[0].size()
-            print(f"🔍 Basic chain analysis for {tag}: {chains[0].size()} + {chains[1].size()} residues")
-        
-        elif len(chains) == 1:
+        if len(chains) == 1:
             print(f"🔍 Monomer structure for {tag}: {chains[0].size()} residues")
-        
+            chain_info['binder_length'] = chains[0].size()
+            
+        elif len(chains) == 2:
+            # For prepared structures, the robust handler puts binder first (index 0), target second (index 1)
+            # This is the result of prepare_structure_for_af2 renumbering
+            chain_info['binder_idx'] = 0  # Binder is always first after preparation
+            chain_info['target_idx'] = 1  # Target is always second after preparation
+            chain_info['binder_length'] = chains[0].size()
+            
+            print(f"🔍 Chain analysis for {tag} (after preparation):")
+            print(f"   Binder (originally chain {chain_info['original_chain_ids'][0]}): {chains[0].size()} residues")
+            print(f"   Target (originally chain {chain_info['original_chain_ids'][1]}): {chains[1].size()} residues")
+            print(f"   📋 Note: Structure has been renumbered with binder first (0-{chains[0].size()-1}), target second ({chains[0].size()}-{structure.size()-1})")
+            
         else:
             print(f"⚠️  Complex structure with {len(chains)} chains - using first 2")
             chain_info['binder_idx'] = 0
@@ -387,6 +434,54 @@ class SimpleScorer:
             chain_info['binder_length'] = chains[0].size()
         
         return chain_info
+    
+    def _validate_chain_indices(self, structure: SimpleStructure, chain_info: dict, tag: str) -> bool:
+        """Validate that chain indices are handled correctly"""
+        
+        try:
+            chains = structure.split_by_chain()
+            
+            # Check that chain info matches actual structure
+            if len(chains) != chain_info['num_chains']:
+                print(f"⚠️  Chain count mismatch for {tag}: expected {chain_info['num_chains']}, got {len(chains)}")
+                return False
+            
+            # Check chain lengths
+            actual_lengths = [chain.size() for chain in chains]
+            if actual_lengths != chain_info['chain_lengths']:
+                print(f"⚠️  Chain length mismatch for {tag}: expected {chain_info['chain_lengths']}, got {actual_lengths}")
+                return False
+            
+            # For complexes, validate binder/target assignment
+            if not chain_info['is_monomer'] and len(chains) == 2:
+                binder_idx = chain_info['binder_idx']
+                target_idx = chain_info['target_idx']
+                
+                if binder_idx is None or target_idx is None:
+                    print(f"⚠️  Chain indices not set for {tag}")
+                    return False
+                
+                # Verify binder length matches
+                if chains[binder_idx].size() != chain_info['binder_length']:
+                    print(f"⚠️  Binder length mismatch for {tag}: expected {chain_info['binder_length']}, got {chains[binder_idx].size()}")
+                    return False
+                
+                # Check residue numbering consistency
+                total_residues = sum(chain.size() for chain in chains)
+                if total_residues != structure.size():
+                    print(f"⚠️  Total residue count mismatch for {tag}: {total_residues} != {structure.size()}")
+                    return False
+                
+                print(f"✅ Chain indices validated for {tag}")
+                print(f"   Binder (idx {binder_idx}): {chains[binder_idx].size()} residues")
+                print(f"   Target (idx {target_idx}): {chains[target_idx].size()} residues")
+                print(f"   Total: {total_residues} residues")
+                
+            return True
+            
+        except Exception as e:
+            print(f"❌ Chain index validation failed for {tag}: {e}")
+            return False
     
     def _run_af2_scoring(self, pdb_file: str, tag: str) -> AF2Scores:
         """Run AF2 scoring on predicted structure with enhanced error handling"""
