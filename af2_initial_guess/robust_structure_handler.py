@@ -131,7 +131,12 @@ class RobustStructureHandler:
         io.set_structure(new_structure)
         io.save(temp_file)
         
-        return SimpleStructure(temp_file)
+        # Create new SimpleStructure and preserve original chain ID
+        renumbered_structure = SimpleStructure(temp_file)
+        if hasattr(chain_structure, 'original_chain_id'):
+            renumbered_structure.original_chain_id = chain_structure.original_chain_id
+        
+        return renumbered_structure
     
     def _combine_chains(self, binder: SimpleStructure, target: SimpleStructure) -> SimpleStructure:
         """Combine binder and target into single structure"""
@@ -140,14 +145,20 @@ class RobustStructureHandler:
         model = Model(0)
         combined_structure.add(model)
         
-        # Add binder chain (rename to A)
+        # Add binder chain (preserve original chain ID if available)
         binder_chain = list(binder.structure.get_chains())[0].copy()
-        binder_chain.id = 'A'
+        if hasattr(binder, 'original_chain_id') and binder.original_chain_id:
+            binder_chain.id = binder.original_chain_id
+        else:
+            binder_chain.id = 'A'
         model.add(binder_chain)
         
-        # Add target chain (rename to B)  
+        # Add target chain (preserve original chain ID if available)
         target_chain = list(target.structure.get_chains())[0].copy()
-        target_chain.id = 'B'
+        if hasattr(target, 'original_chain_id') and target.original_chain_id:
+            target_chain.id = target.original_chain_id
+        else:
+            target_chain.id = 'B'
         model.add(target_chain)
         
         # Save combined structure
@@ -164,10 +175,13 @@ class RobustStructureHandler:
         binder_idx = target_idx = None
         
         for i, chain_struct in enumerate(chains):
-            chain_id = list(chain_struct.structure.get_chains())[0].get_id()
-            if chain_id == binder_id:
+            # Check both the current chain ID and the original chain ID
+            current_chain_id = list(chain_struct.structure.get_chains())[0].get_id()
+            original_chain_id = getattr(chain_struct, 'original_chain_id', current_chain_id)
+            
+            if current_chain_id == binder_id or original_chain_id == binder_id:
                 binder_idx = i
-            elif chain_id == target_id:
+            elif current_chain_id == target_id or original_chain_id == target_id:
                 target_idx = i
         
         if binder_idx is None:
@@ -314,11 +328,27 @@ def prepare_structure_for_af2(pdb_file: Union[str, Path],
     # Validate structure
     validation = handler.validate_structure(structure)
     
+    # Check if errors are fixable by renumbering
     if not validation['valid']:
-        print("❌ Structure validation failed:")
+        fixable_errors = []
+        unfixable_errors = []
+        
         for error in validation['errors']:
-            print(f"   Error: {error}")
-        raise ValueError("Structure has critical errors. Please fix manually.")
+            if auto_renumber and "Overlapping residue numbers between chains" in error:
+                fixable_errors.append(error)
+            else:
+                unfixable_errors.append(error)
+        
+        if unfixable_errors:
+            print("❌ Structure validation failed with unfixable errors:")
+            for error in unfixable_errors:
+                print(f"   Error: {error}")
+            raise ValueError("Structure has critical errors. Please fix manually.")
+        
+        if fixable_errors:
+            print("⚠️  Structure has fixable validation issues:")
+            for error in fixable_errors:
+                print(f"   Will fix: {error}")
     
     if validation['warnings']:
         print("⚠️  Structure warnings:")
@@ -351,5 +381,6 @@ def prepare_structure_for_af2(pdb_file: Union[str, Path],
             print("❌ Renumbering failed:")
             for error in validation_after['errors']:
                 print(f"   Error: {error}")
+            raise ValueError("Renumbering failed to fix structure issues.")
     
     return structure

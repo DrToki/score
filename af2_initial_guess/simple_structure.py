@@ -24,6 +24,9 @@ class SimpleStructure:
         self.parser = PDBParser(QUIET=True)
         self.structure = self.parser.get_structure('protein', str(pdb_file))
         
+        # Initialize original_chain_id to None (will be set by split_by_chain if needed)
+        self.original_chain_id = None
+        
         # Extract basic information
         self.sequence_str = self._extract_sequence()
         self.atoms = self._extract_atoms()
@@ -96,7 +99,7 @@ class SimpleStructure:
                 new_model = Model(0)
                 new_structure.add(new_model)
                 
-                # Copy chain to new structure
+                # Copy chain to new structure, preserving original chain ID
                 chain_copy = chain.copy()
                 new_model.add(chain_copy)
                 
@@ -108,6 +111,8 @@ class SimpleStructure:
                 
                 # Create SimpleStructure from temp file
                 chain_struct = SimpleStructure(temp_file)
+                # Store original chain ID for later reference
+                chain_struct.original_chain_id = chain.get_id()
                 chains.append(chain_struct)
         
         return chains
@@ -171,6 +176,13 @@ class SimpleStructure:
                         res_idx += 1
         
         return breaks
+    
+    def get_chain_id(self) -> str:
+        """Get the chain ID of the first chain in the structure"""
+        for model in self.structure:
+            for chain in model:
+                return chain.get_id()
+        return 'A'  # Default fallback
 
 def load_from_pdb_dir(pdb_dir: str) -> List[SimpleStructure]:
     """Load structures from PDB directory"""
