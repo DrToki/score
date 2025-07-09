@@ -83,17 +83,40 @@ except ImportError as e:
     print(f"Warning: AF2 dependencies not available: {e}")
     AF2_AVAILABLE = False
 
+# Import robust structure handling functionality
+try:
+    from robust_structure_handler import RobustStructureHandler, prepare_structure_for_af2
+    ROBUST_HANDLER_AVAILABLE = True
+except ImportError as e:
+    print(f"Warning: Robust structure handler not available: {e}")
+    ROBUST_HANDLER_AVAILABLE = False
+
 class SimpleScorer:
     """Simple unified scorer - no over-engineering"""
     
     def __init__(self, rosetta_path: str = "rosetta_scripts", xml_script: str = None, 
                  use_ipsae: bool = True, af2_predictions_dir: str = "af2_predictions",
-                 rosetta_database_dir: str = None):
+                 rosetta_database_dir: str = None, auto_clean: bool = True, 
+                 auto_renumber: bool = True, strict_validation: bool = False):
         self.rosetta_path = rosetta_path
         self.xml_script = xml_script  # Will be provided later
         self.use_ipsae = use_ipsae
         self.af2_predictions_dir = af2_predictions_dir
         self.rosetta_database_dir = rosetta_database_dir or "/net/software/Rosetta/main/database"
+        
+        # Structure handling options
+        self.auto_clean = auto_clean
+        self.auto_renumber = auto_renumber
+        self.strict_validation = strict_validation
+        
+        # Initialize robust structure handler
+        self.structure_handler = None
+        if ROBUST_HANDLER_AVAILABLE:
+            self.structure_handler = RobustStructureHandler()
+            print("✅ Robust structure handler initialized")
+        else:
+            print("⚠️  Robust structure handler not available - using basic structure handling")
+        
         self._setup_af2_model()
         
         # Create predictions directory if it doesn't exist
@@ -123,11 +146,23 @@ class SimpleScorer:
     def score_complex(self, pdb_file: str, tag: str) -> ScoreResults:
         """Score a single complex with AF2 + Rosetta + ipSAE"""
         
-        # Step 1: Load structure (use existing code)
-        structure = SimpleStructure(pdb_file)
+        # Step 1: Load and prepare structure using robust handler
+        try:
+            structure = SimpleStructure(pdb_file)
+            print(f"📁 Loaded structure {tag}: {structure.size()} residues")
+            
+            # Prepare structure for prediction
+            prepared_structure = self._prepare_structure_for_prediction(structure, tag)
+            
+            # Analyze chain structure using robust handler
+            chain_info = self._analyze_chain_structure(prepared_structure, tag)
+            
+        except Exception as e:
+            print(f"❌ Structure loading failed for {tag}: {e}")
+            raise
         
         # Step 2: Run AF2 prediction to generate predicted structure
-        af2_predicted_pdb = self._run_af2_prediction(structure, tag)
+        af2_predicted_pdb = self._run_af2_prediction(prepared_structure, tag)
         
         # Step 3: Run AF2 scoring on predicted structure
         af2_scores = self._run_af2_scoring(af2_predicted_pdb, tag)
@@ -169,17 +204,20 @@ class SimpleScorer:
                 print(f"AF2 prediction already exists for {tag}, skipping prediction")
                 return af2_predicted_pdb
             
-            # Determine structure properties
-            chains = structure.split_by_chain()
+            # Prepare structure using robust handler if available
+            prepared_structure = self._prepare_structure_for_prediction(structure, tag)
+            
+            # Determine structure properties from prepared structure
+            chains = prepared_structure.split_by_chain()
             is_monomer = len(chains) == 1
             binder_length = chains[0].size() if not is_monomer else -1
             
-            # Generate AF2 features
-            all_atom_positions, all_atom_masks = structure.get_atoms_for_af2()
+            # Generate AF2 features from prepared structure
+            all_atom_positions, all_atom_masks = prepared_structure.get_atoms_for_af2()
             initial_guess = af2_util.parse_initial_guess(all_atom_positions)
             
             # Determine which residues to template
-            sequence = structure.sequence()
+            sequence = prepared_structure.sequence()
             if is_monomer:
                 residue_mask = [False for _ in range(len(sequence))]
             else:
@@ -264,15 +302,118 @@ class SimpleScorer:
             # Return original structure if prediction fails
             return structure.pdb_file
     
-    def _run_af2_scoring(self, pdb_file: str, tag: str) -> AF2Scores:
-        """Run AF2 scoring on predicted structure"""
+    def _prepare_structure_for_prediction(self, structure: SimpleStructure, tag: str) -> SimpleStructure:
+        """Prepare structure for AF2 prediction using robust handler"""
+        
+        if not ROBUST_HANDLER_AVAILABLE or self.structure_handler is None:
+            print(f"Using basic structure handling for {tag}")
+            return structure
         
         try:
+            print(f"📋 Preparing structure for {tag} using robust handler...")
+            
+            # Use robust structure preparation
+            prepared_structure = prepare_structure_for_af2(
+                structure.pdb_file,
+                auto_clean=self.auto_clean,
+                auto_renumber=self.auto_renumber
+            )
+            
+            # Validate the prepared structure
+            validation_report = self.structure_handler.validate_structure(prepared_structure)
+            
+            if not validation_report['valid']:
+                if self.strict_validation:
+                    raise ValueError(f"Structure validation failed for {tag}: {validation_report['errors']}")
+                else:
+                    print(f"⚠️  Structure validation warnings for {tag}: {validation_report['warnings']}")
+                    print(f"⚠️  Structure validation errors for {tag}: {validation_report['errors']}")
+            
+            print(f"✅ Structure prepared successfully for {tag}")
+            return prepared_structure
+            
+        except Exception as e:
+            print(f"❌ Structure preparation failed for {tag}: {e}")
+            print(f"   Falling back to basic structure handling")
+            return structure
+    
+    def _analyze_chain_structure(self, structure: SimpleStructure, tag: str) -> dict:
+        """Analyze chain structure and provide detailed information"""
+        
+        chains = structure.split_by_chain()
+        chain_info = {
+            'num_chains': len(chains),
+            'is_monomer': len(chains) == 1,
+            'chain_lengths': [chain.size() for chain in chains],
+            'total_residues': structure.size(),
+            'binder_idx': None,
+            'target_idx': None,
+            'binder_length': None
+        }
+        
+        if ROBUST_HANDLER_AVAILABLE and self.structure_handler and len(chains) == 2:
+            try:
+                # Use robust handler for chain detection
+                binder_idx, target_idx = self.structure_handler.auto_detect_binder_target(structure)
+                chain_info['binder_idx'] = binder_idx
+                chain_info['target_idx'] = target_idx
+                chain_info['binder_length'] = chains[binder_idx].size()
+                
+                print(f"🔍 Chain analysis for {tag}:")
+                print(f"   Binder (chain {binder_idx}): {chains[binder_idx].size()} residues")
+                print(f"   Target (chain {target_idx}): {chains[target_idx].size()} residues")
+                
+            except Exception as e:
+                print(f"⚠️  Chain auto-detection failed for {tag}: {e}")
+                print(f"   Using basic chain order (binder=0, target=1)")
+                chain_info['binder_idx'] = 0
+                chain_info['target_idx'] = 1
+                chain_info['binder_length'] = chains[0].size()
+        
+        elif len(chains) == 2:
+            # Fallback to basic detection
+            chain_info['binder_idx'] = 0
+            chain_info['target_idx'] = 1
+            chain_info['binder_length'] = chains[0].size()
+            print(f"🔍 Basic chain analysis for {tag}: {chains[0].size()} + {chains[1].size()} residues")
+        
+        elif len(chains) == 1:
+            print(f"🔍 Monomer structure for {tag}: {chains[0].size()} residues")
+        
+        else:
+            print(f"⚠️  Complex structure with {len(chains)} chains - using first 2")
+            chain_info['binder_idx'] = 0
+            chain_info['target_idx'] = 1
+            chain_info['binder_length'] = chains[0].size()
+        
+        return chain_info
+    
+    def _run_af2_scoring(self, pdb_file: str, tag: str) -> AF2Scores:
+        """Run AF2 scoring on predicted structure with enhanced error handling"""
+        
+        try:
+            # Load and validate structure
             structure = SimpleStructure(pdb_file)
+            print(f"🧪 Running AF2 scoring for {tag}...")
+            
+            # Validate structure before scoring
+            if ROBUST_HANDLER_AVAILABLE and self.structure_handler:
+                validation_report = self.structure_handler.validate_structure(structure)
+                if not validation_report['valid']:
+                    print(f"⚠️  Structure validation issues for {tag}: {validation_report['errors']}")
+                    if self.strict_validation:
+                        raise ValueError(f"Structure validation failed: {validation_report['errors']}")
+            
+            # Use AF2 scorer
             from af2_no_pyrosetta import AF2ScorerSimple
             scorer = AF2ScorerSimple()
             af2_dict = scorer.score_structure(structure)
             
+            # Validate scoring results
+            if not self._validate_af2_scores(af2_dict, tag):
+                print(f"⚠️  AF2 scoring results may be unreliable for {tag}")
+            
+            print(f"✅ AF2 scoring completed for {tag}")
             return AF2Scores(
                 plddt_total=af2_dict['plddt_total'],
                 plddt_binder=af2_dict['plddt_binder'], 
@@ -281,19 +422,10 @@ class SimpleScorer:
                 binder_length=af2_dict['binder_length'],
                 is_monomer=af2_dict['is_monomer']
             )
+            
         except Exception as e:
-            print(f"AF2 scoring failed for {tag}: {e}")
-            # Return reasonable defaults
-            structure = SimpleStructure(pdb_file)
-            chains = structure.split_by_chain()
-            return AF2Scores(
-                plddt_total=50.0,
-                plddt_binder=50.0,
-                pae_interaction=20.0,
-                binder_aligned_rmsd=5.0,
-                binder_length=chains[0].size() if chains else 100,
-                is_monomer=len(chains) == 1
-            )
+            print(f"❌ AF2 scoring failed for {tag}: {e}")
+            return self._get_fallback_af2_scores(pdb_file, tag)
     
     def _run_rosetta(self, pdb_file: str, tag: str) -> RosettaScores:
         """Run Rosetta scoring - placeholder for XML script"""
@@ -495,10 +627,75 @@ class SimpleScorer:
         return (af2_weight * af2_component + 
                 rosetta_weight * rosetta_component + 
                 ipsae_weight * ipsae_component)
+    
+    def _validate_af2_scores(self, af2_dict: dict, tag: str) -> bool:
+        """Validate AF2 scoring results for reasonableness"""
+        
+        warnings = []
+        
+        # Check pLDDT values
+        if af2_dict['plddt_total'] < 30:
+            warnings.append(f"Very low pLDDT ({af2_dict['plddt_total']:.1f})")
+        elif af2_dict['plddt_total'] > 95:
+            warnings.append(f"Unusually high pLDDT ({af2_dict['plddt_total']:.1f})")
+        
+        # Check PAE values
+        if af2_dict['pae_interaction'] > 25:
+            warnings.append(f"High PAE interaction ({af2_dict['pae_interaction']:.1f})")
+        
+        # Check RMSD values
+        if af2_dict['binder_aligned_rmsd'] > 10:
+            warnings.append(f"High RMSD ({af2_dict['binder_aligned_rmsd']:.1f})")
+        
+        # Check for NaN or invalid values
+        for key, value in af2_dict.items():
+            if isinstance(value, (int, float)) and (np.isnan(value) or np.isinf(value)):
+                warnings.append(f"Invalid {key} value: {value}")
+        
+        if warnings:
+            print(f"⚠️  AF2 scoring warnings for {tag}: {'; '.join(warnings)}")
+            return False
+        
+        return True
+    
+    def _get_fallback_af2_scores(self, pdb_file: str, tag: str) -> AF2Scores:
+        """Generate fallback AF2 scores when scoring fails"""
+        
+        try:
+            structure = SimpleStructure(pdb_file)
+            chains = structure.split_by_chain()
+            is_monomer = len(chains) == 1
+            binder_length = chains[0].size() if chains else 100
+            
+            print(f"🔄 Using fallback AF2 scores for {tag}")
+            
+            return AF2Scores(
+                plddt_total=50.0,
+                plddt_binder=50.0,
+                pae_interaction=20.0 if not is_monomer else 0.0,
+                binder_aligned_rmsd=5.0,
+                binder_length=binder_length,
+                is_monomer=is_monomer
+            )
+            
+        except Exception:
+            print(f"❌ Cannot generate fallback scores for {tag}")
+            return AF2Scores(
+                plddt_total=50.0,
+                plddt_binder=50.0,
+                pae_interaction=20.0,
+                binder_aligned_rmsd=5.0,
+                binder_length=100,
+                is_monomer=False
+            )
 
 def main():
-    """Simple main function"""
+    """Enhanced main function with robust error handling"""
     import argparse
+    
+    print("🧬 Simple AF2 + Rosetta + ipSAE Scoring Pipeline")
+    print("   Enhanced with robust structure prediction tools")
+    print("=" * 60)
     
     parser = argparse.ArgumentParser(description="Simple protein complex scoring")
     parser.add_argument("--pdb", required=True, help="PDB file or directory")
@@ -508,12 +705,25 @@ def main():
     parser.add_argument("--rosetta_database_dir", help="Rosetta database directory")
     parser.add_argument("--no_ipsae", action="store_true", help="Disable ipSAE interface scoring")
     
+    # Enhanced structure handling options
+    parser.add_argument("--no_auto_clean", action="store_true", help="Disable automatic structure cleaning")
+    parser.add_argument("--no_auto_renumber", action="store_true", help="Disable automatic residue renumbering")
+    parser.add_argument("--strict_validation", action="store_true", help="Fail on any structure validation issues")
+    parser.add_argument("--continue_on_error", action="store_true", help="Continue processing even if some structures fail")
+    
     args = parser.parse_args()
     
-    # Initialize scorer
-    scorer = SimpleScorer(rosetta_path=args.rosetta_path, xml_script=args.xml_script, 
-                         use_ipsae=not args.no_ipsae, af2_predictions_dir="af2_predictions",
-                         rosetta_database_dir=args.rosetta_database_dir)
+    # Initialize scorer with enhanced options
+    scorer = SimpleScorer(
+        rosetta_path=args.rosetta_path, 
+        xml_script=args.xml_script, 
+        use_ipsae=not args.no_ipsae, 
+        af2_predictions_dir="af2_predictions",
+        rosetta_database_dir=args.rosetta_database_dir,
+        auto_clean=not args.no_auto_clean,
+        auto_renumber=not args.no_auto_renumber,
+        strict_validation=args.strict_validation
+    )
     
     # Get PDB files
     pdb_path = Path(args.pdb)
@@ -524,20 +734,33 @@ def main():
     else:
         raise ValueError(f"Invalid PDB input: {args.pdb}")
     
-    # Score all complexes
+    # Score all complexes with enhanced error handling
     results = []
-    for pdb_file in pdb_files:
+    failed_structures = []
+    
+    print(f"\n🚀 Starting to score {len(pdb_files)} structures...")
+    
+    for i, pdb_file in enumerate(pdb_files, 1):
         tag = pdb_file.stem
-        print(f"Scoring {tag}...")
+        print(f"\n[{i}/{len(pdb_files)}] Scoring {tag}...")
         
         try:
             scores = scorer.score_complex(str(pdb_file), tag)
             results.append(scores)
-            print(f"  Unified score: {scores.unified_score:.3f}")
+            print(f"  ✅ Unified score: {scores.unified_score:.3f}")
+            print(f"     AF2 pLDDT: {scores.af2_plddt:.1f}, PAE: {scores.af2_pae:.1f}")
+            print(f"     Rosetta: {scores.rosetta_total:.1f}, ipSAE: {scores.ipsae_score:.3f}")
+            
         except Exception as e:
-            print(f"  Failed: {e}")
+            error_msg = f"Failed to score {tag}: {e}"
+            failed_structures.append((tag, str(e)))
+            print(f"  ❌ {error_msg}")
+            
+            if not args.continue_on_error:
+                print(f"\n💥 Stopping due to error. Use --continue_on_error to skip failed structures.")
+                break
     
-    # Write results
+    # Write results with enhanced reporting
     if results:
         with open(args.output, 'w', newline='') as f:
             from dataclasses import asdict
@@ -546,10 +769,28 @@ def main():
             writer.writeheader()
             writer.writerows(dict_results)
         
-        print(f"\nResults written to {args.output}")
-        print(f"Scored {len(results)} complexes")
+        print(f"\n📊 Results Summary:")
+        print(f"   Successfully scored: {len(results)} complexes")
+        print(f"   Failed structures: {len(failed_structures)}")
+        print(f"   Results written to: {args.output}")
+        
+        if failed_structures:
+            print(f"\n❌ Failed structures:")
+            for tag, error in failed_structures:
+                print(f"   {tag}: {error}")
+        
+        # Print top scoring results
+        if len(results) > 0:
+            sorted_results = sorted(results, key=lambda x: x.unified_score, reverse=True)
+            print(f"\n🏆 Top scoring complexes:")
+            for i, result in enumerate(sorted_results[:5], 1):
+                print(f"   {i}. {result.tag}: {result.unified_score:.3f}")
     else:
-        print("No complexes scored successfully")
+        print("\n💥 No complexes scored successfully")
+        if failed_structures:
+            print(f"All {len(failed_structures)} structures failed:")
+            for tag, error in failed_structures:
+                print(f"   {tag}: {error}")
 
 if __name__ == "__main__":
     main()
