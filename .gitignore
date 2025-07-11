@@ -100,6 +100,7 @@ Thumbs.db
 # Test files and temporary structures
 test_*.pdb
 test_*.cif
+test_*.py
 sample_*.pdb
 example_*.pdb
 dummy_*.pdb
