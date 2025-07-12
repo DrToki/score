@@ -13,6 +13,8 @@ from pathlib import Path
 from typing import List, Tuple
 from dataclasses import dataclass
 import numpy as np
+import json
+import pandas as pd
 
 @dataclass
 class AF2Scores:
@@ -26,10 +28,33 @@ class AF2Scores:
 
 @dataclass
 class RosettaScores:
-    """Concrete type for Rosetta scoring results"""
+    """Concrete type for Rosetta scoring results - comprehensive binding metrics"""
+    # Core scores
     total_score: float
     interface_score: float
-    binding_energy: float
+    binding_energy: float           
+    per_residue_energy: float 
+    dSASA_int: float
+    binder_encab: float
+    
+    # Comprehensive binding analysis metrics
+    dG_cross: float = 0.0
+    dG_cross_dSASAx100: float = 0.0
+    dG_separated: float = 0.0
+    dG_separated_dSASAx100: float = 0.0
+    dSASA_polar: float = 0.0
+    dSASA_hphobic: float = 0.0
+    binder_encabulator_metric_mean_res_summary: float = 0.0
+    binder_encabulator_metric_sum_res_summary: float = 0.0
+    core_res_fa_atr_res_summary: float = 0.0
+    exposed_hydrophobics: float = 0.0
+    interface_encabulator_metric_mean_res_summary: float = 0.0
+    interface_encabulator_metric_sum_res_summary: float = 0.0
+    delta_unsatHbonds: float = 0.0
+    total_energy: float = 0.0
+    AlaCount: float = 0.0
+    af2_plddt_metric_mean_res_summary: float = 0.0
+    beta_nov16_res_summary: float = 0.0
 
 @dataclass
 class IPSAEScores:
@@ -41,18 +66,51 @@ class IPSAEScores:
 
 @dataclass
 class ScoreResults:
-    """Concrete type for final scoring results"""
+    """Concrete type for final scoring results - comprehensive metrics for CSV output"""
+    # Basic info
     tag: str
+    binder_length: int
+    is_monomer: bool
+    
+    # AF2 scores
     af2_plddt: float
     af2_pae: float
     af2_rmsd: float
+    
+    # Core Rosetta scores
     rosetta_total: float
     rosetta_interface: float
     rosetta_binding: float
+    rosetta_per_residue_energy: float 
+    rosetta_dSASA_int: float
+    rosetta_binder_encab: float
+    
+    # Comprehensive Rosetta binding analysis
+    rosetta_dG_cross: float
+    rosetta_dG_cross_dSASAx100: float
+    rosetta_dG_separated: float
+    rosetta_dG_separated_dSASAx100: float
+    rosetta_dSASA_polar: float
+    rosetta_dSASA_hphobic: float
+    rosetta_binder_encabulator_metric_mean_res_summary: float
+    rosetta_binder_encabulator_metric_sum_res_summary: float
+    rosetta_core_res_fa_atr_res_summary: float
+    rosetta_exposed_hydrophobics: float
+    rosetta_interface_encabulator_metric_mean_res_summary: float
+    rosetta_interface_encabulator_metric_sum_res_summary: float
+    rosetta_delta_unsatHbonds: float
+    rosetta_total_energy: float
+    rosetta_AlaCount: float
+    rosetta_af2_plddt_metric_mean_res_summary: float
+    rosetta_beta_nov16_res_summary: float
+    
+    # ipSAE scores
     ipsae_score: float
+    pdockq_score: float
+    lis_score: float
+    
+    # Combined score
     unified_score: float
-    binder_length: int
-    is_monomer: bool
 
 # Use existing AF2 code
 sys.path.append(os.path.join(os.path.dirname(__file__), 'af2_initial_guess'))
@@ -63,7 +121,6 @@ try:
     import af2_util
     from timeit import default_timer as timer
     import uuid
-    import json
     import shutil
 except ImportError as e:
     print(f"Error importing core dependencies: {e}")
@@ -170,26 +227,59 @@ class SimpleScorer:
         af2_scores = self._run_af2_scoring(af2_scores, af2_predicted_pdb, tag)
         
         # Step 4: Run Rosetta scoring on predicted structure
-        rosetta_scores = self._run_rosetta(af2_predicted_pdb, tag)
+        rosetta_scores, rosetta_score_file = self._run_rosetta(af2_predicted_pdb, tag)
         
         # Step 5: Run ipSAE interface scoring on predicted structure
-        ipsae_scores = self._run_ipsae(af2_predicted_pdb, tag) if self.use_ipsae else None
+        ipsae_scores, ipsae_output_file = self._run_ipsae(af2_predicted_pdb, tag) if self.use_ipsae else (None, None)
         
         # Step 6: Combine scores (simple weighted sum)
         unified_score = self._combine_scores(af2_scores, rosetta_scores, ipsae_scores)
         
         return ScoreResults(
+            # Basic info
             tag=tag,
+            binder_length=af2_scores.binder_length,
+            is_monomer=af2_scores.is_monomer,
+            
+            # AF2 scores
             af2_plddt=af2_scores.plddt_total,
             af2_pae=af2_scores.pae_interaction,
             af2_rmsd=af2_scores.binder_aligned_rmsd,
+            
+            # Core Rosetta scores
             rosetta_total=rosetta_scores.total_score,
             rosetta_interface=rosetta_scores.interface_score,
             rosetta_binding=rosetta_scores.binding_energy,
+            rosetta_per_residue_energy=rosetta_scores.per_residue_energy,
+            rosetta_dSASA_int=rosetta_scores.dSASA_int,
+            rosetta_binder_encab=rosetta_scores.binder_encab,
+            
+            # Comprehensive Rosetta binding analysis
+            rosetta_dG_cross=rosetta_scores.dG_cross,
+            rosetta_dG_cross_dSASAx100=rosetta_scores.dG_cross_dSASAx100,
+            rosetta_dG_separated=rosetta_scores.dG_separated,
+            rosetta_dG_separated_dSASAx100=rosetta_scores.dG_separated_dSASAx100,
+            rosetta_dSASA_polar=rosetta_scores.dSASA_polar,
+            rosetta_dSASA_hphobic=rosetta_scores.dSASA_hphobic,
+            rosetta_binder_encabulator_metric_mean_res_summary=rosetta_scores.binder_encabulator_metric_mean_res_summary,
+            rosetta_binder_encabulator_metric_sum_res_summary=rosetta_scores.binder_encabulator_metric_sum_res_summary,
+            rosetta_core_res_fa_atr_res_summary=rosetta_scores.core_res_fa_atr_res_summary,
+            rosetta_exposed_hydrophobics=rosetta_scores.exposed_hydrophobics,
+            rosetta_interface_encabulator_metric_mean_res_summary=rosetta_scores.interface_encabulator_metric_mean_res_summary,
+            rosetta_interface_encabulator_metric_sum_res_summary=rosetta_scores.interface_encabulator_metric_sum_res_summary,
+            rosetta_delta_unsatHbonds=rosetta_scores.delta_unsatHbonds,
+            rosetta_total_energy=rosetta_scores.total_energy,
+            rosetta_AlaCount=rosetta_scores.AlaCount,
+            rosetta_af2_plddt_metric_mean_res_summary=rosetta_scores.af2_plddt_metric_mean_res_summary,
+            rosetta_beta_nov16_res_summary=rosetta_scores.beta_nov16_res_summary,
+            
+            # ipSAE scores
             ipsae_score=ipsae_scores.ipsae_score if ipsae_scores else 0.0,
-            unified_score=unified_score,
-            binder_length=af2_scores.binder_length,
-            is_monomer=af2_scores.is_monomer
+            pdockq_score=ipsae_scores.pdockq_score if ipsae_scores else 0.0,
+            lis_score=ipsae_scores.lis_score if ipsae_scores else 0.0,
+            
+            # Combined score
+            unified_score=unified_score
         )
     
     def _run_af2_prediction(self, structure: SimpleStructure, tag: str) -> str:
@@ -232,6 +322,9 @@ class SimpleScorer:
             # Generate AF2 features from prepared structure
             all_atom_positions, all_atom_masks = prepared_structure.get_atoms_for_af2()
             initial_guess = af2_util.parse_initial_guess(all_atom_positions)
+            
+            # Store initial coordinates for RMSD calculation
+            initial_coordinates = all_atom_positions  # Shape: [L, 27, 3]
             
             # Determine which residues to template using chain analysis
             sequence = prepared_structure.sequence()
@@ -303,7 +396,7 @@ class SimpleScorer:
             
             # Extract AF2 scores using the same logic as predict.py
             af2_scores = self._extract_af2_scores_from_prediction(
-                prediction_result, confidences, binder_length, is_monomer, tag
+                prediction_result, confidences, binder_length, is_monomer, tag, initial_coordinates
             )
             
             # Save PAE matrix as JSON for psae.py
@@ -514,7 +607,7 @@ class SimpleScorer:
         return result
     
     def _extract_af2_scores_from_prediction(self, prediction_result, confidences: dict, 
-                                          binder_length: int, is_monomer: bool, tag: str) -> AF2Scores:
+                                          binder_length: int, is_monomer: bool, tag: str, initial_coordinates: np.ndarray = None) -> AF2Scores:
         """Extract AF2 scores from prediction result using the same logic as predict.py"""
         
         try:
@@ -537,21 +630,37 @@ class SimpleScorer:
                 else:
                     pae_interaction = 15.0  # Default value
             
-            # Calculate RMSD using the same method as af2_no_pyrosetta.py
+            # Calculate RMSD using af2_util.calculate_rmsds() if initial coordinates available
             binder_aligned_rmsd = 2.5  # Default fallback
             
             try:
-                # Extract predicted coordinates from AF2 result
-                structure_module = prediction_result['structure_module']
-                predicted_atom_positions = structure_module['final_atom_positions']
-                
-                # Get initial coordinates (would need to be passed in for real RMSD calc)
-                # For now, use a reasonable default since we don't have initial coords here
-                print(f"   📐 RMSD calculation: Using default value (initial coords not available in this context)")
-                binder_aligned_rmsd = 2.5
+                if initial_coordinates is not None:
+                    # Extract predicted coordinates from AF2 result
+                    structure_module = prediction_result['structure_module']
+                    predicted_atom_positions = structure_module['final_atom_positions']
+                    
+                    # Create target mask for RMSD calculation (same as predict.py)
+                    target_mask = np.zeros(len(initial_coordinates), dtype=bool)
+                    if not is_monomer:
+                        target_mask[binder_length:] = True  # Target residues are after binder
+                    
+                    # Calculate real RMSD using af2_util.calculate_rmsds()
+                    rmsds_dict = af2_util.calculate_rmsds(
+                        initial_coordinates,      # Initial coords [L, 27, 3]
+                        predicted_atom_positions, # Predicted coords [L, 27, 3]
+                        target_mask               # Target mask [L]
+                    )
+                    
+                    binder_aligned_rmsd = float(rmsds_dict['binder_aligned_rmsd'])
+                    print(f"   📐 RMSD calculation: Real calculation = {binder_aligned_rmsd:.2f} Å")
+                    
+                else:
+                    print(f"   📐 RMSD calculation: Using default value (initial coords not provided)")
+                    binder_aligned_rmsd = 2.5
                 
             except Exception as e:
                 print(f"   ⚠️  RMSD calculation failed for {tag}: {e}")
+                print(f"   🔄 Falling back to default RMSD value")
                 binder_aligned_rmsd = 2.5
             
             print(f"   📊 AF2 metrics extracted for {tag}:")
@@ -719,21 +828,28 @@ class SimpleScorer:
             print(f"❌ AF2 score processing failed for {tag}: {e}")
             return self._get_fallback_af2_scores(pdb_file, tag)
     
-    def _run_rosetta(self, pdb_file: str, tag: str) -> RosettaScores:
-        """Run Rosetta scoring - placeholder for XML script"""
+    def _run_rosetta(self, pdb_file: str, tag: str) -> tuple[RosettaScores, str]:
+        """Run Rosetta scoring and return scores + preserved score file path"""
         
         if not self.xml_script:
             # Return mock scores until XML is provided
             return RosettaScores(
                 total_score=-500.0,
                 interface_score=-20.0,
-                binding_energy=-15.0
-            )
+                binding_energy=-15.0,
+                per_residue_energy=0.0,
+                dSASA_int=0.0,
+                binder_encab=0.0
+            ), None
+        
+        # Create results directory for preserved files
+        results_dir = Path("rosetta_results")
+        results_dir.mkdir(exist_ok=True)
         
         # Create temp directory
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
-            score_file = temp_path / f"{tag}_scores.sc"
+            temp_score_file = temp_path / f"{tag}_scores.sc"
             
             # Build motif paths using configurable database directory
             motif_path = os.path.join(self.rosetta_database_dir, 
@@ -746,7 +862,7 @@ class SimpleScorer:
                 self.rosetta_path,
                 '-s', pdb_file,
                 '-parser:protocol', self.xml_script,
-                '-out:file:scorefile', str(score_file),
+                '-out:file:scorefile', str(temp_score_file),
                 '-overwrite',
                 '-mh:score:use_ss1', 'true',
                 '-mh:score:use_ss2', 'true',
@@ -768,116 +884,179 @@ class SimpleScorer:
             
             try:
                 subprocess.run(cmd, check=True, timeout=3600)
-                return self._parse_rosetta_scores(score_file)
+                scores = self._parse_rosetta_scores(temp_score_file)
+                
+                # Preserve the score file
+                preserved_score_file = results_dir / f"{tag}_rosetta_scores.sc"
+                shutil.copy2(temp_score_file, preserved_score_file)
+                print(f"   📁 Rosetta score file preserved: {preserved_score_file}")
+                
+                return scores, str(preserved_score_file)
+                
             except Exception as e:
                 print(f"Rosetta failed for {tag}: {e}")
-                return RosettaScores(total_score=0.0, interface_score=0.0, binding_energy=0.0)
+                return RosettaScores(
+                    total_score=0.0, 
+                    interface_score=0.0, 
+                    binding_energy=0.0,
+                    per_residue_energy=0.0,
+                    dSASA_int=0.0,
+                    binder_encab=0.0
+                ), None
     
     def _parse_rosetta_scores(self, score_file: Path) -> RosettaScores:
-        """Parse Rosetta score file and extract all relevant scores"""
+        """Parse Rosetta score file using improved JSON/pandas approach from manual.py"""
         total_score = 0.0
         interface_score = 0.0
         binding_energy = 0.0
+        per_residue_energy = 0.0
+        dSASA_int = 0.0
+        binder_encab = 0.0
         
         try:
+            # Initialize empty list to store JSON data
+            data = []
+            
+            # Read JSON lines from Rosetta score file
             with open(score_file, 'r') as f:
-                lines = f.readlines()
+                for line in f:
+                    try:
+                        data.append(json.loads(line.strip()))
+                    except json.JSONDecodeError:
+                        print(f"   ⚠️  Skipping invalid JSON line: {line.strip()}")
             
-            # Find header line to map column indices
-            header_indices = {}
-            score_data = []
+            if not data:
+                print(f"   ❌ No valid JSON data found in score file")
+                raise ValueError("No valid JSON data in score file")
             
-            for line in lines:
-                line = line.strip()
-                if line.startswith('SCORE:') and 'description' in line:
-                    # Parse header line to get column indices
-                    parts = line.split()
-                    for i, col_name in enumerate(parts):
-                        header_indices[col_name] = i
-                elif line.startswith('SCORE:') and 'description' not in line:
-                    # Parse score data line
-                    parts = line.split()
-                    score_data = parts
-                    break
+            # Convert to DataFrame for easier parsing
+            df = pd.DataFrame(data)
             
-            if score_data and header_indices:
-                # Extract total_score (always in column 1)
-                if len(score_data) > 1:
-                    total_score = float(score_data[1])
+            # Extract core scores (using first row)
+            if len(df) > 0:
+                # Primary scores (safe extraction with fallbacks)
+                total_score = df.get("total_energy", pd.Series([0.0]))[0]
+                per_residue_energy = df.get("beta_nov16_res_summary", pd.Series([0.0]))[0]
+                interface_score = df.get("interface_encabulator_metric_mean_res_summary", pd.Series([0.0]))[0]
+                binding_energy = df.get("dG_separated", pd.Series([0.0]))[0]
+                dSASA_int = df.get("dSASA_int", pd.Series([0.0]))[0]
+                binder_encab = df.get("binder_encabulator_metric_mean_res_summary", pd.Series([0.0]))[0]
                 
-                # Extract interface_score (common column names)
-                interface_keys = ['interface_score', 'I_sc', 'interface_energy', 'InterfaceScore']
-                for key in interface_keys:
-                    if key in header_indices and len(score_data) > header_indices[key]:
-                        try:
-                            interface_score = float(score_data[header_indices[key]])
-                            break
-                        except (ValueError, IndexError):
-                            continue
-                
-                # Extract binding energy (common column names)
-                binding_keys = ['dG_cross', 'dG_separated', 'binding_energy', 'ddG', 'delta_total']
-                for key in binding_keys:
-                    if key in header_indices and len(score_data) > header_indices[key]:
-                        try:
-                            binding_energy = float(score_data[header_indices[key]])
-                            break
-                        except (ValueError, IndexError):
-                            continue
-                
-                # If no specific interface score found, try common Rosetta interface metrics
-                if interface_score == 0.0:
-                    # Calculate approximate interface score from energy components
-                    fa_atr_idx = header_indices.get('fa_atr', -1)
-                    fa_rep_idx = header_indices.get('fa_rep', -1)
-                    
-                    if fa_atr_idx != -1 and fa_rep_idx != -1 and len(score_data) > max(fa_atr_idx, fa_rep_idx):
-                        try:
-                            fa_atr = float(score_data[fa_atr_idx])
-                            fa_rep = float(score_data[fa_rep_idx])
-                            interface_score = fa_atr + fa_rep  # Simplified interface approximation
-                        except (ValueError, IndexError):
-                            interface_score = total_score * 0.1  # Fallback: ~10% of total
-                    else:
-                        interface_score = total_score * 0.1  # Fallback approximation
-                
-                print(f"   📊 Parsed Rosetta scores:")
-                print(f"      Total score: {total_score:.2f}")
+                print(f"   📊 Parsed Rosetta scores from JSON:")
+                print(f"      Total energy: {total_score:.2f}")
+                print(f"      Per-residue energy: {per_residue_energy:.2f}")
                 print(f"      Interface score: {interface_score:.2f}")
                 print(f"      Binding energy: {binding_energy:.2f}")
+                print(f"      dSASA_int: {dSASA_int:.2f}")
+                print(f"      Binder encab: {binder_encab:.2f}")
+                
+                # Extract comprehensive binding analysis metrics
+                binding_keys = [
+                    'dG_cross', 'dG_cross/dSASAx100', 'dG_separated', 
+                    'dG_separated/dSASAx100', 'dSASA_polar', 'dSASA_hphobic', 
+                    'dSASA_int', 'binder_encabulator_metric_mean_res_summary', 
+                    'binder_encabulator_metric_sum_res_summary', 
+                    'core_res_fa_atr_res_summary', 'exposed_hydrophobics', 
+                    'interface_encabulator_metric_mean_res_summary', 
+                    'interface_encabulator_metric_sum_res_summary', 
+                    'delta_unsatHbonds', 'total_energy', 'AlaCount', 
+                    'af2_plddt_metric_mean_res_summary', 
+                    'beta_nov16_res_summary'
+                ]
+                
+                # Extract all comprehensive metrics with safe fallbacks
+                comprehensive_scores = {}
+                for key in binding_keys:
+                    comprehensive_scores[key] = df.get(key, pd.Series([0.0]))[0]
+                
+                print(f"   📋 Comprehensive metrics extracted: {len(comprehensive_scores)} values")
+                for key, value in comprehensive_scores.items():
+                    if abs(value) > 0.01:  # Only show non-zero values
+                        print(f"      {key}: {value:.3f}")
                 
             else:
-                # Fallback: try simple parsing if header format is different
+                print(f"   ❌ Empty DataFrame from score file")
+                raise ValueError("Empty DataFrame from score file")
+                
+        except Exception as e:
+            print(f"   ❌ Error parsing Rosetta JSON scores: {e}")
+            print(f"   🔄 Falling back to legacy score parsing...")
+            
+            # Fallback to legacy parsing for non-JSON files
+            try:
+                with open(score_file, 'r') as f:
+                    lines = f.readlines()
+                
                 for line in lines:
                     if line.startswith('SCORE:') and 'description' not in line:
                         parts = line.split()
                         if len(parts) >= 2:
                             total_score = float(parts[1])
-                            # Use simple approximations if can't find specific scores
-                            interface_score = total_score * 0.15  # ~15% approximation
-                            binding_energy = total_score * 0.20   # ~20% approximation
+                            # Use approximations for missing scores
+                            interface_score = total_score * 0.15
+                            binding_energy = total_score * 0.20
+                            per_residue_energy = total_score * 0.05
+                            dSASA_int = abs(total_score) * 0.1
+                            binder_encab = total_score * 0.1
                         break
                 
-                print(f"   ⚠️  Using simplified Rosetta score parsing:")
+                print(f"   📊 Legacy Rosetta score parsing:")
                 print(f"      Total score: {total_score:.2f}")
                 print(f"      Interface score: {interface_score:.2f} (estimated)")
                 print(f"      Binding energy: {binding_energy:.2f} (estimated)")
+                
+            except Exception as e2:
+                print(f"   ❌ Legacy parsing also failed: {e2}")
+                print(f"   🔄 Using fallback default scores")
+                total_score = 0.0
+                interface_score = 0.0
+                binding_energy = 0.0
+                per_residue_energy = 0.0
+                dSASA_int = 0.0
+                binder_encab = 0.0
         
-        except Exception as e:
-            print(f"   ❌ Error parsing Rosetta scores: {e}")
-            print(f"   🔄 Using fallback scores")
-            total_score = 0.0
-            interface_score = 0.0
-            binding_energy = 0.0
-        
-        return RosettaScores(
-            total_score=total_score,
-            interface_score=interface_score,
-            binding_energy=binding_energy
-        )
+        # Create comprehensive RosettaScores with all metrics
+        # Handle case where comprehensive_scores might not be defined (fallback scenario)
+        if 'comprehensive_scores' in locals():
+            return RosettaScores(
+                total_score=total_score,
+                interface_score=interface_score,
+                binding_energy=binding_energy,
+                per_residue_energy=per_residue_energy,
+                dSASA_int=dSASA_int,
+                binder_encab=binder_encab,
+                # Comprehensive binding analysis metrics
+                dG_cross=comprehensive_scores.get('dG_cross', 0.0),
+                dG_cross_dSASAx100=comprehensive_scores.get('dG_cross/dSASAx100', 0.0),
+                dG_separated=comprehensive_scores.get('dG_separated', 0.0),
+                dG_separated_dSASAx100=comprehensive_scores.get('dG_separated/dSASAx100', 0.0),
+                dSASA_polar=comprehensive_scores.get('dSASA_polar', 0.0),
+                dSASA_hphobic=comprehensive_scores.get('dSASA_hphobic', 0.0),
+                binder_encabulator_metric_mean_res_summary=comprehensive_scores.get('binder_encabulator_metric_mean_res_summary', 0.0),
+                binder_encabulator_metric_sum_res_summary=comprehensive_scores.get('binder_encabulator_metric_sum_res_summary', 0.0),
+                core_res_fa_atr_res_summary=comprehensive_scores.get('core_res_fa_atr_res_summary', 0.0),
+                exposed_hydrophobics=comprehensive_scores.get('exposed_hydrophobics', 0.0),
+                interface_encabulator_metric_mean_res_summary=comprehensive_scores.get('interface_encabulator_metric_mean_res_summary', 0.0),
+                interface_encabulator_metric_sum_res_summary=comprehensive_scores.get('interface_encabulator_metric_sum_res_summary', 0.0),
+                delta_unsatHbonds=comprehensive_scores.get('delta_unsatHbonds', 0.0),
+                total_energy=comprehensive_scores.get('total_energy', 0.0),
+                AlaCount=comprehensive_scores.get('AlaCount', 0.0),
+                af2_plddt_metric_mean_res_summary=comprehensive_scores.get('af2_plddt_metric_mean_res_summary', 0.0),
+                beta_nov16_res_summary=comprehensive_scores.get('beta_nov16_res_summary', 0.0)
+            )
+        else:
+            # Fallback case - return basic scores with zeros for comprehensive metrics
+            return RosettaScores(
+                total_score=total_score,
+                interface_score=interface_score,
+                binding_energy=binding_energy,
+                per_residue_energy=per_residue_energy,
+                dSASA_int=dSASA_int,
+                binder_encab=binder_encab
+            )
     
-    def _run_ipsae(self, pdb_file: str, tag: str) -> IPSAEScores:
-        """Run ipSAE interface scoring using psae.py"""
+    def _run_ipsae(self, pdb_file: str, tag: str) -> tuple[IPSAEScores, str]:
+        """Run ipSAE interface scoring using psae.py and return scores + preserved output file path"""
         
         try:
             # Look for corresponding PAE JSON file
@@ -886,8 +1065,9 @@ class SimpleScorer:
                 print(f"PAE file not found for {tag}: {pae_file}")
                 raise FileNotFoundError(f"PAE file not found: {pae_file}")
             
-            # Run psae.py as subprocess
-            import tempfile
+            # Create results directory for preserved files
+            results_dir = Path("psae_results")
+            results_dir.mkdir(exist_ok=True)
             
             # Create temp output directory to capture psae.py results
             with tempfile.TemporaryDirectory() as temp_dir:
@@ -912,11 +1092,35 @@ class SimpleScorer:
                     raise Exception(f"psae.py failed: {result.stderr}")
                 
                 # Parse the output file
-                output_file = os.path.join(temp_dir, f"{tag}_10_10.txt")
-                if os.path.exists(output_file):
-                    return self._parse_psae_output(output_file)
+                temp_output_file = os.path.join(temp_dir, f"{tag}_10_10.txt")
+                if os.path.exists(temp_output_file):
+                    scores = self._parse_psae_output(temp_output_file)
+                    
+                    # Preserve the output files
+                    preserved_main_file = results_dir / f"{tag}_psae_10_10.txt"
+                    preserved_byres_file = results_dir / f"{tag}_psae_10_10_byres.txt"
+                    preserved_pml_file = results_dir / f"{tag}_psae_10_10.pml"
+                    
+                    # Copy main output file
+                    shutil.copy2(temp_output_file, preserved_main_file)
+                    
+                    # Copy additional output files if they exist
+                    temp_byres_file = os.path.join(temp_dir, f"{tag}_10_10_byres.txt")
+                    if os.path.exists(temp_byres_file):
+                        shutil.copy2(temp_byres_file, preserved_byres_file)
+                    
+                    temp_pml_file = os.path.join(temp_dir, f"{tag}_10_10.pml")
+                    if os.path.exists(temp_pml_file):
+                        shutil.copy2(temp_pml_file, preserved_pml_file)
+                    
+                    print(f"   📁 psae.py results preserved:")
+                    print(f"      Main: {preserved_main_file}")
+                    print(f"      By-residue: {preserved_byres_file}")
+                    print(f"      PyMOL: {preserved_pml_file}")
+                    
+                    return scores, str(preserved_main_file)
                 else:
-                    raise Exception(f"psae.py output file not found: {output_file}")
+                    raise Exception(f"psae.py output file not found: {temp_output_file}")
             
         except Exception as e:
             print(f"ipSAE scoring failed for {tag}: {e}")
@@ -931,17 +1135,17 @@ class SimpleScorer:
                     pdockq_score=ipsae_dict['pdockq_score'],
                     lis_score=ipsae_dict['lis_score'],
                     interface_pae=ipsae_dict['interface_pae']
-                )
+                ), None
             except Exception:
                 return IPSAEScores(
                     ipsae_score=0.5,
                     pdockq_score=0.5,
                     lis_score=0.5,
                     interface_pae=15.0
-                )
+                ), None
     
     def _parse_psae_output(self, output_file: str) -> IPSAEScores:
-        """Parse psae.py output file to extract scores"""
+        """Parse psae.py output file to extract scores (improved from manual.py)"""
         ipsae_score = 0.5
         pdockq_score = 0.5
         lis_score = 0.5
@@ -960,9 +1164,15 @@ class SimpleScorer:
                         pdockq_score = float(parts[9])  # pDockQ column
                         lis_score = float(parts[11])  # LIS column
                         # interface_pae would need to be calculated from PAE data
+                        
+                        print(f"   📊 Parsed psae.py scores:")
+                        print(f"      ipSAE score: {ipsae_score:.3f}")
+                        print(f"      pDockQ score: {pdockq_score:.3f}")
+                        print(f"      LIS score: {lis_score:.3f}")
+                        
                         break
         except Exception as e:
-            print(f"Error parsing psae.py output: {e}")
+            print(f"   ❌ Error parsing psae.py output: {e}")
         
         return IPSAEScores(
             ipsae_score=ipsae_score,
@@ -1143,7 +1353,30 @@ def main():
         print(f"\n📊 Results Summary:")
         print(f"   Successfully scored: {len(results)} complexes")
         print(f"   Failed structures: {len(failed_structures)}")
-        print(f"   Results written to: {args.output}")
+        print(f"   Main results written to: {args.output}")
+        
+        # Report additional output files
+        print(f"\n📁 Additional Output Files:")
+        print(f"   AF2 predictions: af2_predictions/ directory")
+        print(f"   Rosetta score files: rosetta_results/ directory")
+        print(f"   psae.py results: psae_results/ directory")
+        
+        # Check if directories exist and report file counts
+        af2_dir = Path("af2_predictions")
+        rosetta_dir = Path("rosetta_results") 
+        psae_dir = Path("psae_results")
+        
+        if af2_dir.exists():
+            af2_files = list(af2_dir.glob("*.pdb")) + list(af2_dir.glob("*.json"))
+            print(f"      AF2 files: {len(af2_files)} (PDB + JSON)")
+        
+        if rosetta_dir.exists():
+            rosetta_files = list(rosetta_dir.glob("*.sc"))
+            print(f"      Rosetta score files: {len(rosetta_files)}")
+        
+        if psae_dir.exists():
+            psae_files = list(psae_dir.glob("*.txt")) + list(psae_dir.glob("*.pml"))
+            print(f"      psae.py files: {len(psae_files)} (TXT + PML)")
         
         if failed_structures:
             print(f"\n❌ Failed structures:")
@@ -1156,6 +1389,9 @@ def main():
             print(f"\n🏆 Top scoring complexes:")
             for i, result in enumerate(sorted_results[:5], 1):
                 print(f"   {i}. {result.tag}: {result.unified_score:.3f}")
+                print(f"      AF2: pLDDT={result.af2_plddt:.1f}, PAE={result.af2_pae:.1f}")
+                print(f"      Rosetta: total={result.rosetta_total:.1f}, interface={result.rosetta_interface:.1f}")
+                print(f"      ipSAE: {result.ipsae_score:.3f}, pDockQ: {result.pdockq_score:.3f}, LIS: {result.lis_score:.3f}")
     else:
         print("\n💥 No complexes scored successfully")
         if failed_structures:

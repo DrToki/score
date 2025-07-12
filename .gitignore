@@ -25,6 +25,7 @@ slurm_jobs/
 af2_results/
 rosetta_results/
 pipeline_results/
+test_report/
 
 # Score files and outputs
 *.sc
@@ -109,6 +110,8 @@ dummy_*.pdb
 *.bak
 *.backup
 *~
+*_OLD.md
+*_old.md
 
 # Configuration files with sensitive data
 config_local.yml
